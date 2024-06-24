@@ -27,5 +27,7 @@ if __name__ == "__main__":
     hist_bins = None
   maker = DatacardMaker(args.config, args.input, hist_bins=hist_bins)
   maker.createDatacards(args.output)
+  #for k, v in vars(maker).iteritems():
+      #print (k, get_class_attr(v))
 
 

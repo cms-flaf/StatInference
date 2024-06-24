@@ -1,14 +1,18 @@
-analysis: hh_bbtt
+analysis: hh_bbt
 type: resonant
 model:
   parameters: [ MX ]
   param_dependent_bkg: false
   input_file_pattern: ${ERA}.root
+hist_bins: [245, 350, 450,600,750,1250,3500]
 eras:
-  - Run2_2018
+  - Run_2018
+  #- Run_2017
+  #- Run_2016
+  #- Run_2016_HIPM
 channels:
-  - eTau
-  - muTau
+  #- eTau
+  #- muTau
   - tauTau
 categories:
   - res1b
@@ -24,16 +28,1201 @@ processes:
                     1000, 1250, 1500, 1750, 2000, 2500, 3000,  ]
     is_signal: true
     scale: 2 * 6.272E-02 * 5.824E-01
-  - TT
-  - DY
+  - process: TT
+    #subprocesses:
+  - process: DY
+  - process: VV
+    allowNegativeContributions: True
+    subprocesses:
+    - WW
+    - WZ
+    - ZZ
+  - process: ST
+    allowNegativeContributions: True
+    subprocesses:
+    - ST_tW_antitop_5f_InclusiveDecays
+    - ST_tW_top_5f_InclusiveDecays
+    - ST_t-channel_antitop_4f_InclusiveDecays
+    - ST_t-channel_top_4f_InclusiveDecays
+  #- process: TW
+  #  allowNegativeContributions: True
+  - process: TTX
+    allowNegativeContributions: True
+    subprocesses:
+    - TTWJetsToLNu
+    - TTWJetsToQQ
+    - TTWW
+    - TTWZ
+    - TTWH
+    - TTZH
+    - TTZToLLNuNu_M-10
+    - TTZToQQ
+    - TTZZ
+    - TTZToNuNu
+    - TTGamma_Dilept
+    - TTGamma_Hadronic
+    - TTGamma_SingleLept
+    - TTGG
+    - TTZZTo4b
+    - TTZZToNon4b
+    - TTZHTo4b
+    - TTWH
+    - TTZHTo4b
+    - TTZHToNon4b
+    - TTZH
+    - TTTJ
+    - TTTT
+    - TTTW
+    - TT4b
+  - process: W
+    #subprocesses:
+    #- WJetsToLNu
+    #- W1JetsToLNu
+    #- W2JetsToLNu
+    #- W3JetsToLNu
+    #- W4JetsToLNu
+    #- WJetsToLNu_HT-70To100
+    #- WJetsToLNu_HT-100To200
+    #- WJetsToLNu_HT-1200To2500
+    #- WJetsToLNu_HT-200To400
+    #- WJetsToLNu_HT-2500ToInf
+    #- WJetsToLNu_HT-400To600
+    #- WJetsToLNu_HT-600To800
+    #- WJetsToLNu_HT-800To1200
+  - process: EWK
+    allowNegativeContributions: True
+    subprocesses:
+    - EWK_WplusToLNu
+    - EWK_WminusToLNu
+    - EWK_ZTo2L
+    - EWK_ZTo2Nu
+  - process: VVV
+    allowNegativeContributions: True
+    subprocesses:
+    - WWW_4F
+    - WWZ_4F
+    - WZZ
+    - ZZZ
+  - process: QCD
+  - process: ZJNuNu
+    allowNegativeContributions: True
+    #subprocesses:
+    #- ZJetsToNuNu_HT-100To200
+    #- ZJetsToNuNu_HT-1200To2500
+    #- ZJetsToNuNu_HT-200To400
+    #- ZJetsToNuNu_HT-2500ToInf
+    #- ZJetsToNuNu_HT-400To600
+    #- ZJetsToNuNu_HT-600To800
+    #- ZJetsToNuNu_HT-800To1200
+  - process: ggH_htt
+    allowNegativeContributions: True
+    subprocesses:
+    - GluGluHToTauTau_M125
+    isRelatedTo: VH
+  - process: qqH_htt
+    allowNegativeContributions: True
+    subprocesses:
+    - VBFHToTauTau_M125
+    - VBFHToWWTo2L2Nu_M125
+  - process: VH
+    allowNegativeContributions: True
+    subprocesses:
+      - ggHToZZTo2L2Q
+      - GluGluHToWWTo2L2Nu_M125
+      - VBFHToWWTo2L2Nu_M125
+
+  - process: VH
+    allowNegativeContributions: True
+    subprocesses:
+    - HZJ_HToWW_M125
+    - HWplusJ_HToWW_M125
+    - HWminusJ_HToWW_M125
+    - GluGluZH_HToWW_ZTo2L_M125
+    - ZH_Hbb_Zll
+    - ZH_Hbb_Zqq
+    - WplusHToTauTau_M125
+    - WminusHToTauTau_M125
+    - ZHToTauTau_M125
+  - process: ttH
+    allowNegativeContributions: True
+    subprocesses:
+    - ttH
+
 uncertainties:
   - name: lumi_13TeV
     type: lnN
     value: 0.03
-    processes: ^.*$
-  - name: JER
+  - name: pdf_gg
+    type: lnN
+    value: 0.042
+  - name: BR_hbb
+    type: lnN
+    value:  0.0124
+    processes:
+      - ZH_Hbb_Zqq
+      - ZH_Hbb_Zll
+  - name: BR_htt
+    type: lnN
+    value: 0.0165
+    processes:
+    - ttH
+    - ggH_htt
+    - qqH_htt
+    - VH_htt
+  #- name: QCDscale_V
+  #  type: lnN
+  #  value:
+  #  - value: 0.008
+  #    processes:
+  #    - W
+  #  - value: 0.02
+  #    processes:
+  #    - EWK_WminusToLNu
+  #    - EWK_WplusToLNu
+  #    - EWK_ZTo2L
+  #    - EWK_ZTo2Nu
+  #- name: QCDscale_VH
+  #  type: lnN
+  #  value:
+  #  - value: 0.97/1.038 # -1?
+  #    processes:
+  #    - ZH_hbb
+  #    - ZH_htt
+  #    - ZH_htononbb
+  #  - value: 0.005 # -1?
+  #    processes:
+  #    - WminusHToTauTau_M125
+  #    - WplusHToTauTau_M125
+  - name: QCDscale_VV
+    type: lnN
+    value: 0.1
+    processes:
+    - VV
+  - name: QCDscale_VVV
+    type: lnN
+    value: 0.1
+    processes:
+    - VVV
+  - name: QCDscale_tW
+    type: lnN
+    value: 0.054
+    processes:
+    - tW
+  #- name: alpha_s
+  #  type: lnN
+  #  value:
+  #  - value: 0.009
+  #    processes:
+  #    - ZH_Hbb_Zll
+  #    - ZH_Hbb_Zqq
+  #  - value: 0.026
+  #    processes:
+  #    - GluGluHToTauTau_M125
+  #  - value: 0.005
+  #    processes:
+  #    - VBFHToTauTau_M125
+  #  - value: 0.02
+  #    processes:
+  #    - ttH_hbb
+  - name: pdf_Higgs_gg
+    type: lnN
+    value: 0.019
+    processes:
+    - ggH_Htt
+    - GluGluToRadionToHHTo2B2Tau_M_${MX}
+    - GluGluToBulkGravitonToHHTo2B2Tau_M_${MX}
+  #- name: pdf_Higgs_qqbar
+  #  type: lnN
+  #  value:
+  #  - value: 0.013
+  #    processes:
+  #    - ZH_Hbb_Zll
+  #    - ZH_Hbb_Zqq
+  #  - value: 0.021
+  #    processes:
+  #    - VBFHToTauTau_M125
+  #  - value: 0.017
+  #    processes:
+  #    - WminusHToTauTau_M125
+  #    - WplusHToTauTau_M125
+  - name: pdf_Higgs_ttH
+    type: lnN
+    value: 0.03
+    processes:
+    - ttH_Hbb
+  - name: pdf_Higgs_tH
+    type: lnN
+    value: 0.047
+    processes:
+    - tH
+  - name: pdf_Higgs_qqbar
+    type: lnN
+    value: 0.1
+    processes:
+    - VV
+  - name: QCDscale_singlet
+    type: lnN
+    value: 0.94956353 # 0.978/1.0288
+    processes:
+    - ST_tW_antitop_5f_InclusiveDecays
+    - ST_tW_top_5f_InclusiveDecays
+  - name: CMS_btag_HF
     type: auto
-    categories: ^res[12]b$
+    categories:
+    - res1b
+    - res2b
+  - name: CMS_btag_LF
+    type: auto
+    categories:
+    - res1b
+    - res2b
+  - name: CMS_btag_cferr1
+    type: auto
+    categories:
+    - res1b
+    - res2b
+  - name: CMS_btag_cferr2
+    type: auto
+    categories:
+    - res1b
+    - res2b
+  - name: CMS_btag_hfstats1_2016
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2016
+  - name: CMS_btag_hfstats1_2016_HIPM
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_btag_hfstats1_2017
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2017
+  - name: CMS_btag_hfstats1_2018
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2018
+  - name: CMS_btag_hfstats2_2016
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2016
+  - name: CMS_btag_hfstats2_2016_HIPM
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_btag_hfstats2_2017
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2017
+  - name: CMS_btag_hfstats2_2018
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2018
+  - name: CMS_btag_lfstats1_2016
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2016
+  - name: CMS_btag_lfstats1_2016_HIPM
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_btag_lfstats1_2017
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2017
+  - name: CMS_btag_lfstats1_2018
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2018
+  - name: CMS_btag_lfstats2_2016
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2016
+  - name: CMS_btag_lfstats2_2016_HIPM
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_btag_lfstats2_2017
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2017
+  - name: CMS_btag_lfstats2_2018
+    type: auto
+    categories:
+    - res1b
+    - res2b
+    eras:
+    - Run_2018
+  - name: CMS_eff_e_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_e_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_e_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_e_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_j_PUJET_id_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_j_PUJET_id_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_j_PUJET_id_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_j_PUJET_id_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat1_DM0_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat1_DM0_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_stat1_DM0_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_stat1_DM0_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_stat1_DM10_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat1_DM10_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_stat1_DM10_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_stat1_DM10_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_stat1_DM11_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat1_DM11_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_stat1_DM11_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_stat1_DM11_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_stat1_DM1_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat1_DM1_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_stat1_DM1_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_stat1_DM1_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_stat2_DM0_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat2_DM0_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_stat2_DM0_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_stat2_DM0_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_stat2_DM10_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat2_DM10_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_stat2_DM10_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_stat2_DM10_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_stat2_DM11_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat2_DM11_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_stat2_DM11_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_stat2_DM11_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_stat2_DM1_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_stat2_DM1_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_stat2_DM1_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_stat2_DM1_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_syst_alleras
+    type: auto
+  - name: CMS_eff_t_id_syst_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_syst_2018_DM0
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_syst_2018_DM10
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_syst_2018_DM11
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_syst_2018_DM1
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_syst_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_syst_2017_DM0
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_syst_2017_DM10
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_syst_2017_DM11
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_syst_2017_DM1
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_syst_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_syst_2016_DM0
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_syst_2016_DM10
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_syst_2016_DM11
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_syst_2016_DM1
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_syst_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_syst_2016_HIPM_DM0
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_syst_2016_HIPM_DM10
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_syst_2016_HIPM_DM11
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_syst_2016_HIPM_DM1
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_etauFR_barrel_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_etauFR_barrel_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_etauFR_barrel_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_etauFR_barrel_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_etauFR_endcaps_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_etauFR_endcaps_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_etauFR_endcaps_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_etauFR_endcaps_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_mutauFR_eta0p4to0p8_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_mutauFR_eta0p4to0p8_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_mutauFR_eta0p4to0p8_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_mutauFR_eta0p4to0p8_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_mutauFR_eta0p8to1p2_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_mutauFR_eta0p8to1p2_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_mutauFR_eta0p8to1p2_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_mutauFR_eta0p8to1p2_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_mutauFR_eta1p2to1p7_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_mutauFR_eta1p2to1p7_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_mutauFR_eta1p2to1p7_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_mutauFR_eta1p2to1p7_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_mutauFR_etaGt1p7_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_mutauFR_etaGt1p7_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_mutauFR_etaGt1p7_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_mutauFR_etaGt1p7_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_t_id_mutauFR_etaLt0p4_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_t_id_mutauFR_etaLt0p4_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_t_id_mutauFR_etaLt0p4_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_t_id_mutauFR_etaLt0p4_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  #- name: CMS_eff_t_id_stat_highpT_bin1_2018
+  #  type: auto
+  #  eras:
+  #  - Run_2018
+  #- name: CMS_eff_t_id_stat_highpT_bin1_2017
+  #  type: auto
+  #  eras:
+  #  - Run_2017
+  #- name: CMS_eff_t_id_stat_highpT_bin1_2016
+  #  type: auto
+  #  eras:
+  #  - Run_2016
+  #- name: CMS_eff_t_id_stat_highpT_bin1_2016_HIPM
+  #  type: auto
+  #  eras:
+  #  - Run_2016_HIPM
+  #- name: CMS_eff_t_id_stat_highpT_bin2_2018
+  #  type: auto
+  #  eras:
+  #  - Run_2018
+  #- name: CMS_eff_t_id_stat_highpT_bin2_2017
+  #  type: auto
+  #  eras:
+  #  - Run_2017
+  #- name: CMS_eff_t_id_stat_highpT_bin2_2016
+  #  type: auto
+  #  eras:
+  #  - Run_2016
+  #- name: CMS_eff_t_id_stat_highpT_bin2_2016_HIPM
+  #  type: auto
+  #  eras:
+  #  - Run_2016_HIPM
+  #- name: CMS_eff_t_id_syst_highpT_bin1
+  #  type: auto
+  #- name: CMS_eff_t_id_syst_highpT_bin2
+  #  type: auto
+  #- name: CMS_eff_t_id_syst_highpT_extrap
+  #  type: auto
+  - name: CMS_l1_prefiring_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_l1_prefiring_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_l1_prefiring_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_l1_prefiring_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_l1_ecal_prefiring_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_l1_ecal_prefiring_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_l1_ecal_prefiring_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_l1_ecal_prefiring_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_l1_muon_stat_prefiring_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_l1_muon_stat_prefiring_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_l1_muon_stat_prefiring_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_l1_muon_stat_prefiring_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_l1_muon_syst_prefiring_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_l1_muon_syst_prefiring_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_l1_muon_syst_prefiring_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_l1_muon_syst_prefiring_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_pileup_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_pileup_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_pileup_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_pileup_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_t_DM0_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_t_DM0_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_t_DM0_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_t_DM0_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_t_DM1_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_t_DM1_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_t_DM1_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_t_DM1_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_t_3prong_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_t_3prong_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_t_3prong_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_t_3prong_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_t_eFake_DM0_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_t_eFake_DM0_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_t_eFake_DM0_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_t_eFake_DM0_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_t_eFake_DM1_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_t_eFake_DM1_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_t_eFake_DM1_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_t_eFake_DM1_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_t_muFake_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_t_muFake_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_t_muFake_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_t_muFake_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_res_j_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_res_j_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_res_j_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_res_j_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_j_Abs
+    type: auto
+    eras: ["2018", "2017", "2016", "2016_HIPM"]
+  - name: CMS_scale_j_Abs_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_j_Abs_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_j_Abs_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_j_Abs_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_j_BBEC1
+    type: auto
+    eras: ["2018", "2017", "2016", "2016_HIPM"]
+  - name: CMS_scale_j_BBEC1_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_j_BBEC1_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_j_BBEC1_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_j_BBEC1_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_j_EC2
+    type: auto
+    eras: ["2018", "2017", "2016", "2016_HIPM"]
+  - name: CMS_scale_j_EC2_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_j_EC2_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_j_EC2_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_j_EC2_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_j_FlavQCD
+    type: auto
+    eras: ["2018", "2017", "2016", "2016_HIPM"]
+  - name: CMS_scale_j_HF
+    type: auto
+    eras: ["2018", "2017", "2016", "2016_HIPM"]
+  - name: CMS_scale_j_HF_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_j_HF_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_j_HF_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_j_HF_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_scale_j_RelBal
+    type: auto
+    eras: ["2018", "2017", "2016", "2016_HIPM"]
+  - name: CMS_scale_j_RelSample_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_scale_j_RelSample_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_scale_j_RelSample_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_scale_j_RelSample_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+
+  #- name: CMS_eff_m_highpt_id_HighPtID_2018
+  #  type: auto
+  #  eras:
+  #- Run_2018
+  #- name: CMS_eff_m_highpt_id_HighPtID_2017
+  #  type: auto
+  #  eras:
+  ##- Run_2017
+  #- name: CMS_eff_m_highpt_id_HighPtID_2016
+  #  type: auto
+  #  eras:
+  ##- Run_2016
+  #- name: CMS_eff_m_highpt_id_HighPtID_2016_HIPM
+  #  type: auto
+  #  eras:
+  ##- Run_2016_HIPM
+  #- name: CMS_eff_m_highpt_id_HighPtIDIso_2018
+  #  type: auto
+  #  eras:
+  ##- Run_2018
+  #- name: CMS_eff_m_highpt_id_HighPtIDIso_2017
+  #  type: auto
+  #  eras:
+  ##- Run_2017
+  #- name: CMS_eff_m_highpt_id_HighPtIDIso_2016
+  #  type: auto
+  #  eras:
+  ##- Run_2016
+  #- name: CMS_eff_m_highpt_id_HighPtIDIso_2016_HIPM
+  #  type: auto
+  #  eras:
+  ##- Run_2016_HIPM
+  #- name: CMS_eff_m_highpt_id_Reco_2018
+  #  type: auto
+  #  eras:
+  ##- Run_2018
+  #- name: CMS_eff_m_highpt_id_Reco_2017
+  #  type: auto
+  #  eras:
+  ##- Run_2017
+  #- name: CMS_eff_m_highpt_id_Reco_2016
+  #  type: auto
+  #  eras:
+  #- Run_2016
+  #- name: CMS_eff_m_highpt_id_Reco_2016_HIPM
+  #  type: auto
+  #  eras:
+  #- Run_2016_HIPM
+  #- name: CMS_eff_m_highpt_id_TightID_2018
+  #  type: auto
+  #  eras:
+  #- Run_2018
+  #- name: CMS_eff_m_highpt_id_TightID_2017
+  #  type: auto
+  #  eras:
+  #- Run_2017
+  #- name: CMS_eff_m_highpt_id_TightID_2016
+  #  type: auto
+  #  eras:
+  #- Run_2016
+  #- name: CMS_eff_m_highpt_id_TightID_2016_HIPM
+  #  type: auto
+  #  eras:
+  #- Run_2016_HIPM
+  #- name: CMS_eff_m_id_highptid
+  #  type: auto
+  #  eras:
+  #- Run_2018
+  #- name: CMS_eff_m_id_highpti7
+  #  type: auto
+  #  eras: ["20187]
+  #- name: #CMS_eff_m_id_highpti6
+  #  type: auto
+  #  eras: ["20186]
+  #- name: #CMS_eff_m_id_highpti6_HIPM
+  #  type: auto
+  #  eras: ["20186_HIPM]
+  #- name: #CMS_eff_m_id_HighPtIso_2018
+  #  type: auto
+  #  eras:
+  #- Run_2018
+  #- name: CMS_eff_m_id_HighPtIso_2017
+  #  type: auto
+  #  eras:
+  #- Run_2017
+  #- name: CMS_eff_m_id_HighPtIso_2016
+  #  type: auto
+  #  eras:
+  #- Run_2016
+  #- name: CMS_eff_m_id_HighPtIso_2016_HIPM
+  #  type: auto
+  #  eras:
+  #- Run_2016_HIPM
+  #- name: CMS_eff_m_id_Reco_2018
+  #  type: auto
+  #  eras:
+  #- Run_2018
+  #- name: CMS_eff_m_id_Reco_2017
+  #  type: auto
+  #  eras:
+  #- Run_2017
+  #- name: CMS_eff_m_id_Reco_2016
+  #  type: auto
+  #  eras:
+  #- Run_2016
+  #- name: CMS_eff_m_id_Reco_2016_HIPM
+  #  type: auto
+  #  eras:
+  #- Run_2016_HIPM
+  #- name: CMS_eff_m_id_TightID_2018
+  #  type: auto
+  #  eras:
+  #- Run_2018
+  #- name: CMS_eff_m_id_TightID_2017
+  #  type: auto
+  #  eras:
+  #- Run_2017
+  #- name: CMS_eff_m_id_TightID_2016
+  #  type: auto
+  #  eras:
+  #- Run_2016
+  #- name: CMS_eff_m_id_TightID_2016_HIPM
+  #  type: auto
+  #  eras:
+  #- Run_2016_HIPM
+  #- name: CMS_eff_m_id_TightIDIso_2018
+  #  type: auto
+  #  eras:
+  #- Run_2018
+  #- name: CMS_eff_m_id_TightIDIso_2017
+  #  type: auto
+  #  eras:
+  #- Run_2017
+  #- name: CMS_eff_m_id_TightIDIso_2016
+  #  type: auto
+  #  eras:
+  #- Run_2016
+  #- name: CMS_eff_m_id_TightIDIso_2016_HIPM
+  #  type: auto
+  #  eras:
+  #- Run_2016_HIPM
+
 autolnNThr: 0.1
 asymlnNThr: 0.001
 ignorelnNThr: 0.001

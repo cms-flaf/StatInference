@@ -92,8 +92,19 @@ def rebinAndFill(new_hist, old_hist, epsilon=1e-7):
         bin_new = new_hist.GetBin(x_bin_new, y_bin_new)
         add_bin_content(bin_old, bin_new)
 
-def hasNegativeBins(histogram):
+def hasRelevantNegativeBins(histogram, relevant_bins = []):
   for n in range(1, histogram.GetNbinsX() + 1):
-    if histogram.GetBinContent(n) < 0:
+    if histogram.GetBinContent(n) < 0 and len(relevant_bins)>0 and relevant_bins[n] == True :
+      print(f"bin {n} is relevant for signals and has negative content")
+      return True
+  return False
+
+def hasNegativeBins(histogram):
+  k=1
+  for n in range(1, histogram.GetNbinsX() + 1):
+    if histogram.GetBinContent(n) < 0 :
+      if round(abs(histogram.GetBinContent(n)),10)+ k*round(abs(histogram.GetBinError(n)),10)>=0:
+        return False
+      print(f"for bin {n} histogram has {histogram.GetBinContent(n)} and error {histogram.GetBinError(n)}")
       return True
   return False

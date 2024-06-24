@@ -1,15 +1,118 @@
 import itertools
 import math
 import os
+import numpy as np
 import yaml
 
 from CombineHarvester.CombineTools.ch import CombineHarvester
 
-from StatInference.common.tools import hasNegativeBins, listToVector, rebinAndFill, importROOT
+from StatInference.common.tools import hasNegativeBins, listToVector, rebinAndFill, importROOT,hasRelevantNegativeBins
 from .process import Process
 from .uncertainty import Uncertainty, UncertaintyType, UncertaintyScale
 from .model import Model
 ROOT = importROOT()
+
+def RenormalizeHistogram(histogram, norm, include_overflows=True):
+    integral = histogram.Integral(0, histogram.GetNbinsX()+1) if include_overflows else histogram.Integral()
+    if integral!=0:
+        histogram.Scale(norm / integral)
+
+def th1ToNumpy(histogram, include_overflow=False):
+    bin_range = (0, histogram.GetNbinsX() + 1) if include_overflow else (1, histogram.GetNbinsX())
+    n_bins = bin_range[1] - bin_range[0] + 1
+    bin_contents = np.zeros(n_bins)
+    bin_errors = np.zeros(n_bins)
+    bin_numbers = np.zeros(n_bins, dtype=int)
+    bin_indices = {}
+    for bin_idx, bin_number in enumerate(range(bin_range[0], bin_range[1] + 1)):
+        bin_contents[bin_idx] = histogram.GetBinContent(bin_number)
+        bin_errors[bin_idx] = histogram.GetBinError(bin_number)
+        bin_numbers[bin_idx] = bin_number
+        bin_indices[bin_number] = bin_idx
+    return bin_indices, bin_numbers, bin_contents, bin_errors
+
+class NegativeBinSolution:
+    def __init__(self):
+        self.accepted = True
+        self.integral = None
+        self.has_zero_integral = False
+        self.has_negative_integral = False
+        self.negative_bins = set()
+        self.negative_bins_within_error = set()
+        self.relevant_negative_bins = set()
+        self.changed_bins = set()
+
+def resolveNegativeBins(histogram, allow_zero_integral=False, allow_negative_integral=False,
+                        allow_negative_bins_within_error=False, max_n_sigma_for_negative_bins=1,
+                        relevant_bins=None, include_overflow=False):
+    relevant_bins = relevant_bins or []
+    bin_indices, bin_numbers, bin_contents, bin_errors = th1ToNumpy(histogram, include_overflow)
+    n_bins = len(bin_numbers)
+
+    solution = NegativeBinSolution()
+    solution.integral = np.sum(bin_contents)
+    if solution.integral == 0:
+        solution.has_zero_integral = True
+        solution.accepted = allow_zero_integral
+        return solution
+    if solution.integral < 0:
+        solution.has_negative_integral = True
+        solution.accepted = allow_negative_integral
+        return solution
+
+    donor_integral = 0.
+    negative_integral = 0.
+
+    for bin_idx in range(n_bins):
+        if bin_contents[bin_idx] >= 0:
+            if bin_numbers[bin_idx] not in relevant_bins:
+                donor_integral += bin_contents[bin_idx]
+            continue
+        negative_integral += bin_contents[bin_idx]
+        solution.negative_bins.add(bin_numbers[bin_idx])
+        #print(bin_idx, bin_numbers[bin_idx])
+        zero_within_error = bin_contents[bin_idx] + max_n_sigma_for_negative_bins * bin_errors[bin_idx] >= 0
+        if zero_within_error:
+            solution.negative_bins_within_error.add(bin_numbers[bin_idx])
+        if not allow_negative_bins_within_error or not zero_within_error:
+            solution.accepted = False
+        if bin_numbers[bin_idx] in relevant_bins:
+            solution.relevant_negative_bins.add(bin_numbers[bin_idx])
+            solution.accepted = False
+
+    if abs(negative_integral) > donor_integral:
+        solution.accepted = False
+
+    if not solution.accepted or len(solution.negative_bins) == 0:
+        return solution
+
+    for bin_number in solution.negative_bins:
+        bin_idx = bin_indices[bin_number]
+        donor_bin_indices = []
+        for i in range(n_bins):
+            if i != bin_idx and bin_numbers[i] not in relevant_bins and bin_contents[i] > 0:
+                donor_bin_indices.append(i)
+        donor_bin_indices = sorted(donor_bin_indices, key=lambda i: abs(i-bin_idx))
+        to_balance = -bin_contents[bin_idx]
+        bin_errors[bin_idx] = math.sqrt(bin_contents[bin_idx] ** 2 + bin_errors[bin_idx] ** 2)
+        bin_contents[bin_idx] = 0
+        solution.changed_bins.add(bin_number)
+        for donor_bin_idx in donor_bin_indices:
+            donor_contribution = min(to_balance, bin_contents[donor_bin_idx])
+            if donor_contribution <= 0: continue
+            bin_errors[donor_bin_idx] = math.sqrt(donor_contribution ** 2 + bin_errors[donor_bin_idx] ** 2)
+            bin_contents[donor_bin_idx] -= donor_contribution
+            solution.changed_bins.add(bin_numbers[donor_bin_idx])
+            to_balance -= donor_contribution
+            if to_balance <= 0: break
+        if to_balance > 0: # this should not happen, because we checked that negative_integral <= donor_integral
+            raise RuntimeError(f"resolveNegativeBins: failed to balance bin {bin_number}")
+    for bin_number in solution.changed_bins:
+        bin_idx = bin_indices[bin_number]
+        histogram.SetBinContent(bin_number, bin_contents[bin_idx])
+        histogram.SetBinError(bin_number, bin_errors[bin_idx])
+
+    return solution
 
 class DatacardMaker:
   def __init__(self, cfg_file, input_path, hist_bins=None):
@@ -42,6 +145,7 @@ class DatacardMaker:
           raise RuntimeError(f"Process name {process.name} already exists")
         print(f"Adding {process}")
         self.processes[process.name] = process
+        #self.processes[process.name]['subprocess'] = [process.subprocesses]
         if process.is_data:
           if data_process is not None:
             raise RuntimeError("Multiple data processes defined")
@@ -113,8 +217,26 @@ class DatacardMaker:
       self.input_files[file_name] = file
     return self.input_files[file_name]
 
-  def getShape(self, process, era, channel, category, model_params, unc_name=None, unc_scale=None):
+  def prepareHist(self,file,hist_name,process):
+    hist = file.Get(hist_name)
+    if hist == None:
+      raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
+    if self.hist_bins is not None:
+      new_hist = ROOT.TH1F(hist.GetName(), hist.GetTitle(), len(self.hist_bins) - 1, self.hist_bins.data())
+      rebinAndFill(new_hist, hist)
+      hist = new_hist
+    hist.SetDirectory(0)
+    if process.scale != 1:
+      hist.Scale(process.scale)
+    return hist
+
+  def getShape(self, process, era, channel, category, model_params,unc_name=None, unc_scale=None):
     key = (process.name, era, channel, category, unc_name, unc_scale)
+    print(f"getting shape for {unc_name}")
+    #print(f"process name {process.name}")
+    if process.name == 'QCD' and category=='boosted':
+      process.allowNegativeContributions = True
+    if category == 'boosted': self.hist_bins = listToVector([245,600,3500], 'double')
     if key not in self.shapes:
       if process.is_data and (unc_name is not None or unc_scale is not None):
         raise RuntimeError("Cannot apply uncertainty to the data process")
@@ -132,28 +254,58 @@ class DatacardMaker:
       else:
         file = self.getInputFile(era, model_params)
         hist_name = f"{channel}/{category}/{process.hist_name}"
-        if unc_name is not None:
-          hist_name = f"{hist_name}_{unc_name}{unc_scale}"
-        hist = file.Get(hist_name)
-        if hist == None:
-          raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
-      if self.hist_bins is not None:
-        new_hist = ROOT.TH1F(hist.GetName(), hist.GetTitle(), len(self.hist_bins) - 1, self.hist_bins.data())
-        rebinAndFill(new_hist, hist)
-        hist = new_hist
-      hist.SetDirectory(0)
-      if process.scale != 1:
-        hist.Scale(process.scale)
-      if hasNegativeBins(hist):
-        axis = hist.GetXaxis()
-        bins_edges = [ str(axis.GetBinLowEdge(n)) for n in range(1, axis.GetNbins() + 2)]
-        bin_values = [ str(hist.GetBinContent(n)) for n in range(1, axis.GetNbins() + 1)]
-        print(f'bins_edges: [ {", ".join(bins_edges)} ]')
-        print(f'bin_values: [ {", ".join(bin_values)} ]')
-        raise RuntimeError(f"Negative bins found in histogram {hist_name}")
+        hists = []
+        if process.subprocesses:
+          for subp in process.subprocesses:
+            hist_name = f"{channel}/{category}/{subp}"
+            if unc_name and unc_scale:
+              hist_name += f"_{unc_name}{unc_scale}"
+            hists.append(self.prepareHist(file,hist_name,process))
+        else:
+          hists.append(self.prepareHist(file,hist_name,process))
+        hist = hists[0]
+        if len(hists)>1:
+          objsToMerge = ROOT.TList()
+          for histy in hists:
+            objsToMerge.Add(histy)
+          hist.Merge(objsToMerge)
+        hist.SetName(process.name)
+        hist.SetTitle(process.name)
+        relevant_bins = self.getRelevantBins(era, channel, category,unc_name, unc_scale=None)
+
+        solution = resolveNegativeBins(hist,relevant_bins=relevant_bins, allow_zero_integral=category=='boosted')
+        if not solution.accepted and process.allowNegativeContributions == False:
+          axis = hist.GetXaxis()
+          bins_edges = [ str(axis.GetBinLowEdge(n)) for n in range(1, axis.GetNbins() + 2)]
+          bin_values = [ str(hist.GetBinContent(n)) for n in range(1, axis.GetNbins() + 1)]
+          print(f'bins_edges: [ {", ".join(bins_edges)} ]')
+          print(f'bin_values: [ {", ".join(bin_values)} ]')
+          raise RuntimeError(f"Negative bins found in histogram {hist_name}")
+
       self.shapes[key] = hist
     return self.shapes[key]
 
+  def getRelevantBins(self, era, channel, category,unc_name=None, unc_scale=None):
+    relevant_bins = []
+    for signal_proc in self.processes.values():
+      if signal_proc.is_signal:
+        model_params = signal_proc.params
+        #param_str = self.model.paramStr(model_params)
+        file = self.getInputFile(era, model_params)
+        hist_name = f"{channel}/{category}/{signal_proc.hist_name}"
+        hist = self.prepareHist(file,hist_name,signal_proc)
+        axis = hist.GetXaxis()
+        hist_integral = hist.Integral(1,axis.GetNbins() + 1)
+        #print(axis.GetNbins())
+        for nbin in range(1,axis.GetNbins() + 1):
+          isImportant=False
+          if hist_integral !=0 and hist.GetBinContent(nbin) / hist_integral >= 0.2:
+            isImportant = True
+          if len(relevant_bins) < axis.GetNbins():
+            relevant_bins.append(isImportant)
+          else:
+            relevant_bins[nbin-1] = isImportant
+    return relevant_bins
 
   def addProcess(self, proc, era, channel, category):
     bin_idx, bin_name = self.getBin(era, channel, category)
@@ -197,12 +349,13 @@ class DatacardMaker:
     for proc, param_str, era, channel, category in self.PPECC():
       process = self.processes[proc]
       if process.is_data: continue
-      if not unc.appliesTo(proc, era, channel, category): continue
+      if not unc.appliesTo(process, era, channel, category): continue
       model_params = self.param_bins.get(param_str, None)
       if not process.hasCompatibleModelParams(model_params, self.model.param_dependent_bkg): continue
 
       nominal_shape = None
       shapes = {}
+      #print(f"need shape? {unc.needShapes}")
       if unc.needShapes:
         model_params = self.param_bins.get(param_str, None)
         nominal_shape = self.getShape(self.processes[proc], era, channel, category, model_params)
@@ -247,6 +400,7 @@ class DatacardMaker:
         for process_name in self.processes.keys():
           self.addProcess(process_name, era, channel, category)
       for unc_name in self.uncertainties.keys():
+        print(f"adding uncertainty: {unc_name}")
         self.addUncertainty(unc_name)
       if self.autoMCStats["apply"]:
         self.cb.SetAutoMCStats(self.cb, self.autoMCStats["threshold"], self.autoMCStats["apply_to_signal"],
