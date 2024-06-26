@@ -9,10 +9,11 @@ from StatInference.common.tools import hasNegativeBins, listToVector, rebinAndFi
 from .process import Process
 from .uncertainty import Uncertainty, UncertaintyType, UncertaintyScale
 from .model import Model
+from .binner import Binner
 ROOT = importROOT()
 
 class DatacardMaker:
-  def __init__(self, cfg_file, input_path, hist_bins=None):
+  def __init__(self, cfg_file, input_path, hist_bins=None, param_values=None):
     self.cb = CombineHarvester()
 
     self.input_path = input_path
@@ -36,6 +37,10 @@ class DatacardMaker:
     data_process = None
     has_signal = False
     for process in cfg["processes"]:
+      if (type(process) != str) and process.get('is_signal', False):
+        if param_values is not None:
+          print(f"Overwriting signal masses to {param_values}")
+          process['param_values'] = param_values
       new_processes = Process.fromConfig(process, self.model)
       for process in new_processes:
         if process.name in self.processes:
@@ -70,11 +75,9 @@ class DatacardMaker:
 
     self.autoMCStats = cfg.get("autoMCStats", { 'apply': False })
 
-    self.hist_bins = hist_bins
-    if self.hist_bins is None:
-      self.hist_bins = cfg.get("hist_bins", None)
-    if self.hist_bins is not None:
-      self.hist_bins = listToVector(self.hist_bins, 'double')
+
+    hist_bins = hist_bins or cfg.get("hist_bins", None)
+    self.hist_binner = Binner(hist_bins)
 
     self.input_files = {}
     self.shapes = {}
@@ -111,10 +114,11 @@ class DatacardMaker:
       if file == None:
         raise RuntimeError(f"Cannot open file {full_file_name}")
       self.input_files[file_name] = file
-    return self.input_files[file_name]
+    return file_name, self.input_files[file_name]
 
   def getShape(self, process, era, channel, category, model_params, unc_name=None, unc_scale=None):
-    key = (process.name, era, channel, category, unc_name, unc_scale)
+    file_name, file = self.getInputFile(era, model_params)
+    key = (file_name, process.name, era, channel, category, unc_name, unc_scale)
     if key not in self.shapes:
       if process.is_data and (unc_name is not None or unc_scale is not None):
         raise RuntimeError("Cannot apply uncertainty to the data process")
@@ -130,17 +134,15 @@ class DatacardMaker:
         if hist is None:
           raise RuntimeError("Cannot create asimov data histogram")
       else:
-        file = self.getInputFile(era, model_params)
+        
         hist_name = f"{channel}/{category}/{process.hist_name}"
         if unc_name is not None:
           hist_name = f"{hist_name}_{unc_name}{unc_scale}"
         hist = file.Get(hist_name)
         if hist == None:
           raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
-      if self.hist_bins is not None:
-        new_hist = ROOT.TH1F(hist.GetName(), hist.GetTitle(), len(self.hist_bins) - 1, self.hist_bins.data())
-        rebinAndFill(new_hist, hist)
-        hist = new_hist
+      hist = self.hist_binner.applyBinning(era, channel, category, model_params, hist)
+      
       hist.SetDirectory(0)
       if process.scale != 1:
         hist.Scale(process.scale)
@@ -150,7 +152,8 @@ class DatacardMaker:
         bin_values = [ str(hist.GetBinContent(n)) for n in range(1, axis.GetNbins() + 1)]
         print(f'bins_edges: [ {", ".join(bins_edges)} ]')
         print(f'bin_values: [ {", ".join(bin_values)} ]')
-        raise RuntimeError(f"Negative bins found in histogram {hist_name}")
+        #raise RuntimeError(f"Negative bins found in histogram {hist_name}")
+        print("Bad bin edges, negative bins found in histogram {hist_name}!!!")
       self.shapes[key] = hist
     return self.shapes[key]
 
@@ -164,6 +167,7 @@ class DatacardMaker:
         self.cb.AddObservations([param_str], [self.analysis], [era], [channel], [(bin_idx, bin_name)])
       else:
         self.cb.AddProcesses([param_str], [self.analysis], [era], [channel], [proc], [(bin_idx, bin_name)], process.is_signal)
+
       shape = self.getShape(process, era, channel, category, model_params)
       shape_set = False
       def setShape(p):
@@ -240,6 +244,24 @@ class DatacardMaker:
       dc_file = os.path.join(output, f"datacard_{proc_name}.txt")
       shape_file = os.path.join(output, f"{proc_name}.root")
       self.cb.cp().mass(param_list).process(processes).WriteDatacard(dc_file, shape_file)
+
+      for subera in self.eras:
+        for subchannel in self.channels:
+          tmp_output = output+f'/{subera}/{subchannel}/'
+          os.makedirs(tmp_output, exist_ok=True)
+          tmp_dc_file = os.path.join(tmp_output, f"datacard_{proc_name}.txt")
+          tmp_shape_file = os.path.join(tmp_output, f"{proc_name}.root")
+          self.cb.cp().era([subera]).channel([subchannel]).mass(param_list).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
+
+        for subcat in self.categories:
+          binset = [ self.getBin(subera, ch, subcat, return_index=False) for ch in self.channels ]
+          tmp_output = output+f'/{subera}/{subcat}/'
+          os.makedirs(tmp_output, exist_ok=True)
+          tmp_dc_file = os.path.join(tmp_output, f"datacard_{proc_name}.txt")
+          tmp_shape_file = os.path.join(tmp_output, f"{proc_name}.root")
+          self.cb.cp().era([subera]).bin(binset).mass(param_list).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
+
+
 
   def createDatacards(self, output, verbose=1):
     try:

@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 if __name__ == "__main__":
   file_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,13 +20,22 @@ if __name__ == "__main__":
   parser.add_argument('--output', required=True, type=str, help="output directory")
   parser.add_argument('--config', required=True, type=str, help="configuration file")
   parser.add_argument('--hist-bins', required=False, type=str, default=None, help="bin edges to rebin histograms")
+  parser.add_argument('--param_values', required=False, type=str, default=None, help="parameter values to run only certain masses")
   args = parser.parse_args()
 
   if args.hist_bins is not None:
-    hist_bins = [ float(x) for x in args.hist_bins.split(',') ]
+    if args.hist_bins.endswith(".json"): hist_bins = args.hist_bins
+    else:
+      hist_bins = [ float(x) for x in args.hist_bins.split(',') ]
   else:
     hist_bins = None
-  maker = DatacardMaker(args.config, args.input, hist_bins=hist_bins)
+
+  if args.param_values is not None:
+    param_values = [ int(x) for x in args.param_values.split(',') ]
+  else:
+    param_values = None
+
+  maker = DatacardMaker(args.config, args.input, hist_bins=hist_bins, param_values=param_values)
   maker.createDatacards(args.output)
 
 

@@ -6,15 +6,15 @@ model:
   input_file_pattern: ${ERA}/shape_m${MX}.root
 hist_bins: [ 0, 0.7, 1 ]
 eras:
-  - Run3_2022EE
+  - Run3_2022
 channels:
-  - ee
-  - emu
   - mumu
+  - emu
+  - ee
 categories:
-  - res1b
   - res2b
   - boost
+  - res1b
 processes:
   - process: data_obs
     is_data: true
@@ -27,6 +27,7 @@ processes:
   - TT
   - DY
   - ST
+  - VV
   # - Other
 uncertainties:
   - name: lumi_13TeV
@@ -37,6 +38,10 @@ uncertainties:
   - name: muID
     type: auto
   - name: pu
+    type: auto
+  - name: jer
+    type: auto
+  - name: jes
     type: auto
 autolnNThr: 0.1
 asymlnNThr: 0.001
