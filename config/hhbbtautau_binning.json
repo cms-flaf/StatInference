@@ -3,5 +3,9 @@
     {"bins": [250, 300, 350, 400, 450, 500,550, 600, 700, 800, 1000, 3000], "categories": ["res1b_cat3_masswindow"],"channels":["tauTau"]},
     {"bins": [250, 300, 350, 400, 450, 500, 600, 1000, 3000], "categories": ["res2b_cat3_masswindow"],"channels":["eTau"]},
     {"bins": [250, 300, 350, 400, 450, 500, 600, 800, 1000, 3000], "categories": ["res2b_cat3_masswindow"],"channels":["muTau"]},
-    {"bins": [250, 300, 350, 400, 450, 500,550, 600, 800, 1000, 3000], "categories": ["res2b_cat3_masswindow"],"channels":["tauTau"]}
+    {"bins": [250, 300, 350, 400, 450, 500,550, 600, 800, 1000, 3000], "categories": ["res2b_cat3_masswindow"],"channels":["tauTau"]},
+    {"bins": [250, 300, 350, 400, 450, 500,550, 600, 700, 800, 1000, 3000], "categories": ["boosted_cat3_masswindow"],"channels":["eTau","muTau","tauTau"]}
 ]
+
+
+

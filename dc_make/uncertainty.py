@@ -108,12 +108,12 @@ class Uncertainty:
             args[key] = getPatternList(key,sub_entry)
           multi_values[key_value] = sub_entry["value"]
           if isinstance(sub_entry["value"], list) and len(sub_entry["value"]) == 2:
-            multi_values[key_value] = {UncertaintyScale.Down: sub_entry["value"][0], UncertaintyScale.Up: sub_entry["value"][1]}
+            multi_values[key_value] = {UncertaintyScale.Down: sub_entry["value"][1], UncertaintyScale.Up: sub_entry["value"][0]}
         unc = MultiValueLnNUncertainty(name, multi_values,**args)
         unc.checkValue()
 
       elif isinstance(value, list) and len(value) == 2 and not hasMultipleValues:
-        value = {UncertaintyScale.Down: value[0], UncertaintyScale.Up: value[1]}
+        value = {UncertaintyScale.Down: value[1], UncertaintyScale.Up: value[0]}
         unc = LnNUncertainty(name, value, **args)
         unc.checkValue()
       elif isinstance(value, dict):

@@ -224,6 +224,7 @@ class DatacardMaker:
   def addProcess(self, proc, era, channel, category):
     bin_idx, bin_name = self.getBin(era, channel, category)
     process = self.processes[proc]
+    # print(process)
     def add(model_params, param_str):
       if process.is_data:
         self.cb.AddObservations([param_str], [self.analysis], [era], [channel], [(bin_idx, bin_name)])
