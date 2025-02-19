@@ -32,6 +32,7 @@ class Binner:
             return True
 
         for entry in self.hist_bins:
+            # print(entry)
             if entry_passes(entry): new_binning.append(entry['bins'])
         if len(new_binning) <= 0:
             raise RuntimeError(f"No binning found for era/channel/category/params {era}/{channel}/{category}/{model_params}")

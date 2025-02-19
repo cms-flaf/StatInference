@@ -125,7 +125,8 @@ class DatacardMaker:
     if unc.getUncertaintyForProcess(process.name) != None:
       return unc.getUncertaintyForProcess(process.name)
     elif process.subprocesses:
-      unc_value_tot = 0.
+      unc_value_tot_down = 0.
+      unc_value_tot_up = 0.
       yield_value_tot = 0.
       for subp in process.subprocesses:
         hist_name = f"{channel}/{category}/{subp}"
@@ -138,10 +139,16 @@ class DatacardMaker:
         unc_value = unc.getUncertaintyForProcess(subp)
         if unc_value != None:
           if yield_subproc == 0 : continue
-          unc_value_tot+=unc_value*yield_subproc
+          # print(unc_value)
+          if isinstance(unc_value, dict):
+            unc_value_tot_up += unc_value[UncertaintyScale.Up]*yield_subproc
+            unc_value_tot_down += unc_value[UncertaintyScale.Down]*yield_subproc
+          else:
+            unc_value_tot_up += unc_value*yield_subproc
+            unc_value_tot_down -= unc_value*yield_subproc
           yield_value_tot+=yield_subproc
-      if unc_value_tot != 0.:
-        return unc_value_tot/yield_value_tot
+      if unc_value_tot_up != 0. and unc_value_tot_down !=0 :
+        return {UncertaintyScale.Down: unc_value_tot_down/yield_value_tot, UncertaintyScale.Up: unc_value_tot_up/yield_value_tot}
       return None
     return None
 

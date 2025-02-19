@@ -7,17 +7,17 @@ model:
 hist_bins: /afs/cern.ch/work/v/vdamante/FLAF/StatInference/config/hhbbtautau_binning.json
 eras:
   - Run_2018
-  - Run_2017
-  - Run_2016
-  - Run_2016_HIPM
+  # - Run_2017
+  # - Run_2016
+  # - Run_2016_HIPM
 channels:
-  #- eTau
-  #- muTau
+  - eTau
+  - muTau
   - tauTau
 categories:
-  - res1b
-  - res2b
-  - boosted
+  - res1b_cat3_masswindow
+  - res2b_cat3_masswindow
+  # - boosted
 signalFractionForRelevantBins: 0.2
 processes:
   - process: data_obs
@@ -41,6 +41,7 @@ processes:
   - process: ST
     allow_zero_integral: True
     allow_negative_bins_within_error: True
+    max_n_sigma_for_negative_bins: 1.2
     subprocesses:
     - ST_tW_antitop_5f_InclusiveDecays
     - ST_tW_top_5f_InclusiveDecays
@@ -116,10 +117,34 @@ processes:
     - ttHTobb_M125
     - ttHToTauTau_M125
 
+
+# https://github.com/LLRCMS/KLUBAnalysis/blob/10821fdc58f6bdb68b0142740f05b8c9f6e23bf9/config/systematics_UL18.cfg#L102
+# https://github.com/LLRCMS/KLUBAnalysis/tree/10821fdc58f6bdb68b0142740f05b8c9f6e23bf9/config
+# https://github.com/LLRCMS/KLUBAnalysis/blob/10821fdc58f6bdb68b0142740f05b8c9f6e23bf9/config/systematics.cfg
+# https://github.com/LLRCMS/KLUBAnalysis/blob/10821fdc58f6bdb68b0142740f05b8c9f6e23bf9/weights/DYstitchMap/getDY_XS_njet_nb.py#L10
+# https://github.com/LLRCMS/KLUBAnalysis/blob/10821fdc58f6bdb68b0142740f05b8c9f6e23bf9/config/systematics_DY2018.cfg#L98
+# luminosity: https://twiki.cern.ch/twiki/bin/view/CMS/LumiRecommendationsRun2#Combination_and_correlations and https://twiki.cern.ch/twiki/bin/view/CMSPublic/PhysicsResultsLUM
+# pileUp scenarios https://twiki.cern.ch/twiki/bin/view/CMS/PileupScenariosRun2
 uncertainties:
+  - name: lumi_13TeV_2018
+    type: lnN
+    eras:
+    - Run_2018
+    value: 0.025
+  - name: lumi_13TeV_2017
+    type: lnN
+    eras:
+    - Run_2017
+    value: 0.023
+  - name: lumi_13TeV_2016
+    type: lnN
+    eras:
+    - Run_2016
+    - Run_2016_HIPM
+    value: 0.012
   - name: lumi_13TeV
     type: lnN
-    value: 0.03
+    value: 0.016
   - name: BR_htt
     type: lnN
     value: 0.0165
@@ -132,301 +157,489 @@ uncertainties:
     - GluGluToBulkGravitonToHHTo2B2Tau*
   - name: BR_hbb
     type: lnN
-    value: 0.0124
+    value: [0.0125, -0.0127]
     processes:
     - ZH_Hbb_Zll
     - ZH_Hbb_Zqq
     - GluGluToRadionToHHTo2B2Tau*
     - GluGluToBulkGravitonToHHTo2B2Tau*
+
   - name: pdf_gg
     type: lnN
     value: 0.042
-  - name: th_ggH
-    type: lnN
-    processes:
-    - ggH
-    value: 0.039
-  - name: th_qqH
-    type: lnN
-    processes:
-    - qqH
-    value: 0.004
-  - name: pdf_Higgs_ggH
-    type: lnN
-    value: 0.019
-    processes:
-    - ggH
-  - name: pdf_Higgs_ttH
-    type: lnN
-    value: 0.03
-    processes:
-    - ttH
-  - name: pdf_Higgs_tH
-    type: lnN
-    value: 0.047
-    processes:
-    - tH
-  - name: pdf_Higgs_qqH
-    type: lnN
-    value: 0.021 # 0.1
-    processes:
-    - qqH
 
-
-  - name: pdf_Higgs_qqbar
-    type: lnN
+  - name: pdf_Higgs # all come from https://twiki.cern.ch/twiki/bin/view/LHCPhysics/CERNYellowReportPageAt13TeV
     hasMultipleValues: True
+    type: lnN
     value:
+    - value: 0.021
+      type: lnN
+      processes:
+      - qqH
     - value: 0.013
       type: lnN
       processes:
       - ZH_Hbb_Zll
       - ZH_Hbb_Zqq
-    - value: 0.021
-      type: lnN
-      processes:
-      - VBFHToTauTau_M125
     - value: 0.017
       type: lnN
       processes:
       - WminusHToTauTau_M125
       - WplusHToTauTau_M125
-
-  - name: pdf_DY
+    - value: 0.03
+      type: lnN
+      processes:
+      - ttH
+    - value: 0.019
+      type: lnN
+      processes:
+      - ggH
+    #- value: 0.047
+      # type: lnN
+      # processes:
+      # - tH
+  - name: pdf_W # da https://twiki.cern.ch/twiki/bin/viewauth/CMS/StandardModelCrossSectionsat13TeV?rev=27
+    value: 0.037588559 # 770.9/20508.9
     type: lnN
-    value: 0.007296099203254119
+    processes:
+    - W
+  - name: pdf_DY # da  https://twiki.cern.ch/twiki/bin/viewauth/CMS/StandardModelCrossSectionsat13TeV?rev=27
+    type: lnN
+    value: 0.0024320331 # 14.78/6077.22
     processes:
     - DY
-
-  - name: QCDscale_VBF
+  - name: integration_DY # da  https://twiki.cern.ch/twiki/bin/viewauth/CMS/StandardModelCrossSectionsat13TeV?rev=27
     type: lnN
-    value: 0.004
+    value: 0.00024517789 # 1.49 / 6077.22
     processes:
-    - qqH
-  - name: QCDscale_TT
+    - DY
+  - name: top_mass # da # https://twiki.cern.ch/twiki/bin/view/LHCPhysics/TtbarNNLO#Proposed_citation_and_list_of_re,
     type: lnN
-    processes:
+    value: [0.027821082, -0.026981652] # 23.2/833.9 -22.5/833.9
+    process:
+    - ST
     - TT
-    value: [0.02458328336,-0.03597553663]
-  - name: QCDscale_DY
-    type: lnN
-    processes:
-    - DY
-    value: 0.02
-  - name: QCDscale_V
+    - ttH
+
+  - name: QCD_scale_process
     hasMultipleValues: True
     type: lnN
-    hasMultipleValues: True
     value:
-    - value: 0.010209719408638887 # 0.008
+    - value: [0.004, -0.003] # valore in percentuale da Higgs_XSBR_YR4_update https://twiki.cern.ch/twiki/bin/view/LHCPhysics/CERNYellowReportPageAt13TeV
+      type: lnN
+      processes:
+      - qqH
+    - value: [0.0080794192,-0.0043005719] # +165.7/20508.9 -88.2/20508.9 https://twiki.cern.ch/twiki/bin/viewauth/CMS/StandardModelCrossSectionsat13TeV?rev=27 # [0.0026931397, -0.0014335240]
+      type: lnN
       processes:
       - W
-    - value: 0.0015150713768754273 #0.02
+    - value: [ 0.024583283, -0.035975537] #[0.0080794192,-0.0043005719] # https://twiki.cern.ch/twiki/bin/view/LHCPhysics/TtbarNNLO#Proposed_citation_and_list_of_re, +20.5/833.9 -30/833.9
+      type: lnN
+      processes:
+      - TT
+    - value: 0.02 # da  https://twiki.cern.ch/twiki/bin/viewauth/CMS/StandardModelCrossSectionsat13TeV?rev=27 direttamente il valore percentuale
+      type: lnN
+      processes:
+      - DY
+    - value: [0.038, -0.031] # https://twiki.cern.ch/twiki/bin/view/LHCPhysics/CERNYellowReportPageAt13TeV#ggZH_Cross_Section il valore percentuale
+      type: lnN
+      processes:
+      - ZH_Hbb_Zll
+      - ZH_Hbb_Zqq
+      - ZHToTauTau_M125
+    - value: [0.005, -0.007] # https://twiki.cern.ch/twiki/bin/view/LHCPhysics/CERNYellowReportPageAt13TeV#WHlH_l_e_or_Process il valore percentuale
+      type: lnN
+      processes:
+      - WminusHToTauTau_M125
+      - WplusHToTauTau_M125
+    - value: 0.016862949452840021 # da XSDB 0.1618/ 0.9595
+      type: lnN
+      processes:
+      - HZJ_HToWW
+    - value: 0.00078864678  # da XSDB  0.0006877/0.872
+      type: lnN
+      processes:
+      - HWplusJ_HToWW
+    - value: 0.00077079890 # da XSDB 0.0004197/0.5445
+      type: lnN
+      processes:
+      - HWminusJ_HToWW
+    #- value: 0.010209719408638887 # 0.008
+    #  processes:
+    #  - W
+    - value: 0.00078835681 # la più grande tra qelle che abbiamo #0.0015150713768754273 #0.02 loro mettono il 2%... bho
+      type: lnN
       processes:
       - EWK_WminusToLNu
       - EWK_WplusToLNu
       - EWK_ZTo2L
       - EWK_ZTo2Nu
-  - name: QCDscale_VH
+    - value: [0.025, -0.022] # https://twiki.cern.ch/twiki/bin/viewauth/CMS/StandardModelCrossSectionsat13TeV?rev=27 # arXiv:1408.5243
+      type: lnN
+      processes:
+      - WW
+    - value: [0.041, -0.033] # JHEP07(2011)018 https://link.springer.com/article/10.1007/JHEP07(2011)018
+      type: lnN
+      processes:
+      - WZ
+    - value: [0.037, -0.026] # JHEP07(2011)018 https://link.springer.com/article/10.1007/JHEP07(2011)018
+      type: lnN
+      processes:
+      - ZZ
+    - value: 0.00345979873 # somma in quadratura di tutte quante
+      type: lnN
+      processes:
+      - VVV
+    - value: 0.054 # non ne ho idea ma tanto nn ci serve
+      type: lnN
+      processes:
+      - tW
+    - value: 0.025104603 # da https://twiki.cern.ch/twiki/bin/view/LHCPhysics/SingleTopRefXsec ma è outdated perchè ora ci sono i calcoli a NNLO quindi da cambiare x la prox produzione
+      type: lnN
+      processes:
+      - ST_tW
+    - value:  [0.030069107, -0.021467431] # da https://twiki.cern.ch/twiki/bin/view/LHCPhysics/SingleTopRefXsec ma è outdated perchè ora ci sono i calcoli a NNLO quindi da cambiare x la prox produzione
+      type: lnN
+      processes:
+      - ST_t-channel_top_4f_InclusiveDecays
+    - value:  [0.0253, -0.0171]  # da https://twiki.cern.ch/twiki/bin/view/LHCPhysics/SingleTopRefXsec ma è outdated perchè ora ci sono i calcoli a NNLO quindi da cambiare x la prox produzione
+      type: lnN
+      processes:
+      - ST_t-channel_top_4f_InclusiveDecays
+    - value: 0.039 # da Higgs_XSBR_YR4_update https://twiki.cern.ch/twiki/bin/view/LHCPhysics/CERNYellowReportPageAt13TeV
+      type: lnN
+      processes:
+      - ggH
+  - name: alpha_s # tutte da Higgs_XSBR_YR4_update https://twiki.cern.ch/twiki/bin/view/LHCPhysics/CERNYellowReportPageAt13TeV tranne quelle di TT che vengono da https://twiki.cern.ch/twiki/bin/view/LHCPhysics/TtbarNNLO#Proposed_citation_and_list_of_re,
+    type: lnN
     hasMultipleValues: True
-    type: lnN
     value:
-    - value: 0.038
-      processes:
-      - ZH_Hbb_Zll
-      - ZH_Hbb_Zqq
-      - ZHToTauTau_M125
-    - value: 0.005
-      processes:
-      - WminusHToTauTau_M125
-      - WplusHToTauTau_M125
-    - value: 0.016862949452840021
-      processes:
-      - HZJ_HToWW
-  - name: QCDscale_VV
-    type: lnN
-    value: 0.02509390849009717
-    processes:
-    - VV
-  - name: QCDscale_VVV
-    type: lnN
-    value: 0.0015074766057555197
-    processes:
-    - VVV
-  - name: QCDscale_tW
-    type: lnN
-    value: 0.054
-    processes:
-    - tW
-  - name: QCDscale_singlet
-    type: lnN
-    value: 0.043999532073744727
-    processes:
-    - ST
-  - name: alpha_s
-    type: lnN
-    hasMultipleValues: True
-    value:
-    - value: 0.009 # ok!
+    - value: 0.009 # ZH
       type: lnN
       processes:
       - ZH_Hbb_Zll
       - ZH_Hbb_Zqq
       - ZHToTauTau
-    - value: 0.026 # ok
+    - value: 0.026
       type: lnN
       processes:
-      - GluGluHToTauTau_M125
-    - value: 0.005 # ok
+      - ggH
+    - value: 0.005
       type: lnN
       processes:
-      - VBFHToTauTau_M125
-    - value: 0.02 # ok
+      - qqH
+    - value: 0.02
       type: lnN
       processes:
       - ttH
-    - value: 0.009 # ok!
+    - value: 0.009 # WH
       type: lnN
       processes:
       - WplusHToTauTau
       - WminusHToTauTau
-    - value: 0.02518287564
+    - value: 0.025182876 #  21./833.9,  PDF + alphas
       type: lnN
       processes: TT
+    - value: [0.66,-0.63] # HWW e HZZ
+      type: lnN
+      processes:
+      - GluGluHToWWTo2L2Nu
+      - VBFHToWWTo2L2Nu
+      - ggHToZZTo2L2Q
+      - GluGluZH_HToWW_ZTo2L
+    # - value: 0.9 # Htt
+    #   type: lnN
+    #   processes:
+    #   - WplusHToTauTau
+    #   - WminusHToTauTau
+    #   - ZHToTauTau
+    #   - GluGluHToTauTau
+    #   - VBFHToTauTau
+    #   - GluGluToRadionToHHTo2B2Tau*
+    #   - GluGluToBulkGravitonToHHTo2B2Tau*
+    # - value: [0.78, -0.8] # Hbb
+    #   type: lnN
+    #   processes:
+    #   - ZH_Hbb_Zll
+    #   - ZH_Hbb_Zqq
+    #   - GluGluToRadionToHHTo2B2Tau*
+    #   - GluGluToBulkGravitonToHHTo2B2Tau*
+    - value: 0.025878547 # 3.52/136.02 da https://twiki.cern.ch/twiki/bin/view/LHCPhysics/SingleTopRefXsec ma è outdated perchè ora ci sono i calcoli a NNLO quindi da cambiare x la prox produzione, quella di ora è pdf+alphas
+      type: lnN
+      processes:
+      - ST_t-channel_top
+    - value: 0.039283508 # 3.18/80.95 da https://twiki.cern.ch/twiki/bin/view/LHCPhysics/SingleTopRefXsec ma è outdated perchè ora ci sono i calcoli a NNLO quindi da cambiare x la prox produzione, quella di ora è pdf+alphas
+      type: lnN
+      processes:
+      - ST_t-channel_antitop
+    - value: 0.047419805 # 3.4/71.7 da https://twiki.cern.ch/twiki/bin/view/LHCPhysics/SingleTopRefXsec ma è outdated perchè ora ci sono i calcoli a NNLO quindi da cambiare x la prox produzione, quella di ora è solo PDF
+      type: lnN
+      processes:
+      - ST_tW
 
+  - name: QCD_norm
+    type: lnN
+    hasMultipleValues: True
+    value:
+    - value: 0.0421311215515085
+      type: lnN
+      channels:
+        - eTau
+      categories:
+        - res2b_cat3_masswindow
+      eras:
+        - Run2_2018
+    - value: 0.0011414999477474851
+      type: lnN
+      channels:
+        - muTau
+      categories:
+        - res2b_cat3_masswindow
+      eras:
+        - Run2_2018
+    - value: 0.07225776708262784
+      type: lnN
+      channels:
+        - tauTau
+      categories:
+        - res2b_cat3_masswindow
+      eras:
+        - Run2_2018
+    - value: 0.004840832311097064
+      type: lnN
+      channels:
+        - eTau
+      categories:
+        - res1b_cat3_masswindow
+      eras:
+        - Run2_2018
+    - value: 0.0051828358274559625
+      type: lnN
+      channels:
+        - muTau
+      categories:
+        - res1b_cat3_masswindow
+      eras:
+        - Run2_2018
+    - value: 0.021042022492051775
+      type: lnN
+      channels:
+        - tauTau
+      categories:
+        - res1b_cat3_masswindow
+      eras:
+        - Run2_2018
+    - value: 0.003382579229981518
+      type: lnN
+      channels:
+        - eTau
+      categories:
+        - baseline_masswindow
+      eras:
+        - Run2_2018
+    - value: 0.0029444915737650195
+      type: lnN
+      channels:
+        - muTau
+      categories:
+        - baseline_masswindow
+      eras:
+        - Run2_2018
+    - value: 0.007229391684982035
+      type: lnN
+      channels:
+        - tauTau
+      categories:
+        - baseline_masswindow
+      eras:
+        - Run2_2018
 
   - name: CMS_btag_HF
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_btag_LF
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_btag_cferr1
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_btag_cferr2
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_btag_hfstats1_2016
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2016
   - name: CMS_btag_hfstats1_2016_HIPM
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2016_HIPM
   - name: CMS_btag_hfstats1_2017
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2017
   - name: CMS_btag_hfstats1_2018
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2018
   - name: CMS_btag_hfstats2_2016
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2016
   - name: CMS_btag_hfstats2_2016_HIPM
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2016_HIPM
   - name: CMS_btag_hfstats2_2017
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2017
   - name: CMS_btag_hfstats2_2018
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2018
   - name: CMS_btag_lfstats1_2016
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2016
   - name: CMS_btag_lfstats1_2016_HIPM
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2016_HIPM
   - name: CMS_btag_lfstats1_2017
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2017
   - name: CMS_btag_lfstats1_2018
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2018
   - name: CMS_btag_lfstats2_2016
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2016
   - name: CMS_btag_lfstats2_2016_HIPM
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2016_HIPM
   - name: CMS_btag_lfstats2_2017
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2017
   - name: CMS_btag_lfstats2_2018
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
     eras:
     - Run_2018
+  - name: CMS_eff_j_PUJET_id_2016
+    type: auto
+    eras:
+    - Run_2016
+    categories:
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
+  - name: CMS_eff_j_PUJET_id_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+    categories:
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
+  - name: CMS_eff_j_PUJET_id_2017
+    type: auto
+    eras:
+    - Run_2017
+    categories:
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
+  - name: CMS_eff_j_PUJET_id_2018
+    type: auto
+    eras:
+    - Run_2018
+    categories:
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
+
+  - name: CMS_eff_m_id_iso_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_m_id_iso_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_m_id_iso_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_m_id_iso_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+
+  - name: CMS_eff_e_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_e_2017
+    type: auto
+    eras:
+    - Run_2017
   - name: CMS_eff_e_2016
     type: auto
     eras:
@@ -435,42 +648,6 @@ uncertainties:
     type: auto
     eras:
     - Run_2016_HIPM
-  - name: CMS_eff_e_2017
-    type: auto
-    eras:
-    - Run_2017
-  - name: CMS_eff_e_2018
-    type: auto
-    eras:
-    - Run_2018
-  - name: CMS_eff_j_PUJET_id_2016
-    type: auto
-    eras:
-    - Run_2016
-    categories:
-    - res1b
-    - res2b
-  - name: CMS_eff_j_PUJET_id_2016_HIPM
-    type: auto
-    eras:
-    - Run_2016_HIPM
-    categories:
-    - res1b
-    - res2b
-  - name: CMS_eff_j_PUJET_id_2017
-    type: auto
-    eras:
-    - Run_2017
-    categories:
-    - res1b
-    - res2b
-  - name: CMS_eff_j_PUJET_id_2018
-    type: auto
-    eras:
-    - Run_2018
-    categories:
-    - res1b
-    - res2b
   - name: CMS_eff_t_id_stat1_DM0_2018
     type: auto
     eras:
@@ -681,6 +858,7 @@ uncertainties:
     type: auto
     eras:
     - Run_2016_HIPM
+
   - name: CMS_eff_t_id_etauFR_barrel_2018
     type: auto
     eras:
@@ -831,6 +1009,38 @@ uncertainties:
     type: auto
   - name: CMS_eff_t_id_syst_highpT_extrap
     type: auto
+  - name: CMS_eff_m_id_reco_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_m_id_reco_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_m_id_reco_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_m_id_reco_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_eff_m_id_reco_highpt_2018
+    type: auto
+    eras:
+    - Run_2018
+  - name: CMS_eff_m_id_reco_highpt_2017
+    type: auto
+    eras:
+    - Run_2017
+  - name: CMS_eff_m_id_reco_highpt_2016
+    type: auto
+    eras:
+    - Run_2016
+  - name: CMS_eff_m_id_reco_highpt_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
   - name: CMS_l1_prefiring_2017
     type: auto
     eras:
@@ -847,54 +1057,7 @@ uncertainties:
     type: auto
     eras:
     - Run_2018
-  - name: CMS_l1_ecal_prefiring_2017
-    type: auto
-    eras:
-    - Run_2017
-  - name: CMS_l1_ecal_prefiring_2016
-    type: auto
-    eras:
-    - Run_2016
-  - name: CMS_l1_ecal_prefiring_2016_HIPM
-    type: auto
-    eras:
-    - Run_2016_HIPM
-  - name: CMS_l1_ecal_prefiring_2018
-    type: auto
-    eras:
-    - Run_2018
-  - name: CMS_l1_muon_stat_prefiring_2017
-    type: auto
-    eras:
-    - Run_2017
-  - name: CMS_l1_muon_stat_prefiring_2016
-    type: auto
-    eras:
-    - Run_2016
-  - name: CMS_l1_muon_stat_prefiring_2016_HIPM
-    type: auto
-    eras:
-    - Run_2016_HIPM
-  - name: CMS_l1_muon_stat_prefiring_2018
-    type: auto
-    eras:
-    - Run_2018
-  - name: CMS_l1_muon_syst_prefiring_2017
-    type: auto
-    eras:
-    - Run_2017
-  - name: CMS_l1_muon_syst_prefiring_2016
-    type: auto
-    eras:
-    - Run_2016
-  - name: CMS_l1_muon_syst_prefiring_2016_HIPM
-    type: auto
-    eras:
-    - Run_2016_HIPM
-  - name: CMS_l1_muon_syst_prefiring_2018
-    type: auto
-    eras:
-    - Run_2018
+
   - name: CMS_pileup_2018
     type: auto
     eras:
@@ -1012,41 +1175,41 @@ uncertainties:
     eras:
     - Run_2018
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_res_j_2017
     type: auto
     eras:
     - Run_2017
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_res_j_2016
     type: auto
     eras:
     - Run_2016
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_res_j_2016_HIPM
     type: auto
     eras:
     - Run_2016_HIPM
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_Abs
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_Abs_2018
     type: auto
     eras:
     - Run_2018
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_Abs_2017
     type: auto
     eras:
@@ -1056,15 +1219,15 @@ uncertainties:
     eras:
     - Run_2016
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_Abs_2016_HIPM
     type: auto
     eras:
     - Run_2016_HIPM
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_BBEC1
     type: auto
     eras: ["2018", "2017", "2016", "2016_HIPM"]
@@ -1073,179 +1236,516 @@ uncertainties:
     eras:
     - Run_2018
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_BBEC1_2017
     type: auto
     eras:
     - Run_2017
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_BBEC1_2016
     type: auto
     eras:
     - Run_2016
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_BBEC1_2016_HIPM
     type: auto
     eras:
     - Run_2016_HIPM
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_EC2
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_EC2_2018
     type: auto
     eras:
     - Run_2018
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_EC2_2017
     type: auto
     eras:
     - Run_2017
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_EC2_2016
     type: auto
     eras:
     - Run_2016
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_EC2_2016_HIPM
     type: auto
     eras:
     - Run_2016_HIPM
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_FlavQCD
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_HF
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_HF_2018
     type: auto
     eras:
     - Run_2018
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_HF_2017
     type: auto
     eras:
     - Run_2017
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_HF_2016
     type: auto
     eras:
     - Run_2016
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_HF_2016_HIPM
     type: auto
     eras:
     - Run_2016_HIPM
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_RelBal
     type: auto
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_RelSample_2018
     type: auto
     eras:
     - Run_2018
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_RelSample_2017
     type: auto
     eras:
     - Run_2017
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_RelSample_2016
     type: auto
     eras:
     - Run_2016
     categories:
-    - res1b
-    - res2b
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
   - name: CMS_scale_j_RelSample_2016_HIPM
     type: auto
     eras:
     - Run_2016_HIPM
     categories:
-    - res1b
-    - res2b
-  - name: CMS_eff_m_id_Reco_2018
+    - res1b_cat3_masswindow
+    - res2b_cat3_masswindow
+  - name: CMS_scale_qcd_2018
     type: auto
     eras:
     - Run_2018
-  - name: CMS_eff_m_id_Reco_2017
+  - name: CMS_scale_qcd_2017
     type: auto
     eras:
     - Run_2017
-  - name: CMS_eff_m_id_Reco_2016
+  - name: CMS_scale_qcd_2016
     type: auto
     eras:
     - Run_2016
-  - name: CMS_eff_m_id_Reco_2016_HIPM
+  - name: CMS_scale_qcd_2016_HIPM
     type: auto
     eras:
     - Run_2016_HIPM
-  - name: CMS_eff_m_id_TightID_2018
+  - name: CMS_pnet_2018
+    type: auto
+    categories:
+    - boosted_cat3_masswindow
+    eras:
+    - Run_2018
+  - name: CMS_pnet_2017
+    type: auto
+    categories:
+    - boosted_cat3_masswindow
+    eras:
+    - Run_2017
+  - name: CMS_pnet_2016
+    type: auto
+    categories:
+    - boosted_cat3_masswindow
+    eras:
+    - Run_2016
+  - name: CMS_pnet_2016_HIPM
+    type: auto
+    categories:
+    - boosted_cat3_masswindow
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_diTau_DM0_2018
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_diTau_DM0_2017
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_diTau_DM0_2016
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_diTau_DM0_2016_HIPM
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_diTau_DM1_2018
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_diTau_DM1_2017
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_diTau_DM1_2016
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_diTau_DM1_2016_HIPM
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_diTau_3Prong_2018
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_diTau_3Prong_2017
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_diTau_3Prong_2016
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_diTau_3Prong_2016_HIPM
+    type: auto
+    channels:
+    - tauTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_singleTau_2018
     type: auto
     eras:
     - Run_2018
-  - name: CMS_eff_m_id_TightID_2017
+  - name: CMS_bbtt_trig_singleTau_2017
     type: auto
     eras:
     - Run_2017
-  - name: CMS_eff_m_id_TightID_2016
+  - name: CMS_bbtt_trig_singleTau_2016
     type: auto
     eras:
     - Run_2016
-  - name: CMS_eff_m_id_TightID_2016_HIPM
+  - name: CMS_bbtt_trig_singleTau_2016_HIPM
     type: auto
     eras:
     - Run_2016_HIPM
-  - name: CMS_eff_m_id_TightIDIso_2018
+  # - name: CMS_bbtt_trig_singleEle_2018
+  #   type: auto
+  #   channels:
+  #   - eTau
+  #   eras:
+  #   - Run_2018
+  # - name: CMS_bbtt_trig_singleEle_2017
+  #   type: auto
+  #   channels:
+  #   - eTau
+  #   eras:
+  #   - Run_2017
+  # - name: CMS_bbtt_trig_singleEle_2016
+  #   type: auto
+  #   channels:
+  #   - eTau
+  #   eras:
+  #   - Run_2016
+  # - name: CMS_bbtt_trig_singleEle_2016_HIPM
+  #   type: auto
+  #   channels:
+  #   - eTau
+  #   eras:
+  #   - Run_2016_HIPM
+  # - name: CMS_bbtt_trig_singleMu_2018
+  #   type: auto
+  #   channels:
+  #   - muTau
+  #   eras:
+  #   - Run_2018
+  # - name: CMS_bbtt_trig_singleMu_2017
+  #   type: auto
+  #   channels:
+  #   - muTau
+  #   eras:
+  #   - Run_2017
+  # - name: CMS_bbtt_trig_singleMu_2016
+  #   type: auto
+  #   channels:
+  #   - muTau
+  #   eras:
+  #   - Run_2016
+  # - name: CMS_bbtt_trig_singleMu_2016_HIPM
+  #   type: auto
+  #   channels:
+  #   - muTau
+  #   eras:
+  #   - Run_2016_HIPM
+
+  - name: CMS_bbtt_trig_eTau_cross_ele_2018
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_eTau_cross_ele_2017
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_eTau_cross_ele_2016
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_eTau_cross_ele_2016_HIPM
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_eTau_SL_ele_2018
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_eTau_SL_ele_2017
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_eTau_SL_ele_2016
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_eTau_SL_ele_2016_HIPM
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_eTau_cross_tau_2018
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_eTau_cross_tau_2017
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_eTau_cross_tau_2016
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_eTau_cross_tau_2016_HIPM
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_muTau_cross_mu_2018
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_muTau_cross_mu_2017
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_muTau_cross_mu_2016
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_muTau_cross_mu_2016_HIPM
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_muTau_SL_mu_2018
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_muTau_SL_mu_2017
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_muTau_SL_mu_2016
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_muTau_SL_mu_2016_HIPM
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_muTau_cross_tau_2018
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_muTau_cross_tau_2017
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_muTau_cross_tau_2016
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_muTau_cross_tau_2016_HIPM
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trig_MET_2018
     type: auto
     eras:
     - Run_2018
-  - name: CMS_eff_m_id_TightIDIso_2017
+  - name: CMS_bbtt_trg_eTau_ele_2018
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trg_muTau_mu_2018
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2018
+  - name: CMS_bbtt_trig_MET_2017
     type: auto
     eras:
     - Run_2017
-  - name: CMS_eff_m_id_TightIDIso_2016
+  - name: CMS_bbtt_trg_eTau_ele_2017
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trg_muTau_mu_2017
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2017
+  - name: CMS_bbtt_trig_MET_2016
     type: auto
     eras:
     - Run_2016
-  - name: CMS_eff_m_id_TightIDIso_2016_HIPM
+  - name: CMS_bbtt_trg_eTau_ele_2016
     type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trg_muTau_mu_2016
+    type: auto
+    channels:
+    - muTau
+    eras:
+    - Run_2016
+  - name: CMS_bbtt_trig_MET_2016_HIPM
+    type: auto
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trg_eTau_ele_2016_HIPM
+    type: auto
+    channels:
+    - eTau
+    eras:
+    - Run_2016_HIPM
+  - name: CMS_bbtt_trg_muTau_mu_2016_HIPM
+    type: auto
+    channels:
+    - muTau
     eras:
     - Run_2016_HIPM
 

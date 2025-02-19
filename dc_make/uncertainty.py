@@ -72,9 +72,9 @@ class Uncertainty:
   @staticmethod
   def fromConfig(entry):
     name = entry["name"]
+    # print(name)
     unc_type = UncertaintyType[entry["type"]]
     hasMultipleValues = entry.get("hasMultipleValues", False)
-
     def getPatternList(key, entry=entry):
         if key not in entry:
             return []
@@ -87,10 +87,9 @@ class Uncertainty:
     for key in ["processes", "eras", "channels", "categories"]:
         args[key] = getPatternList(key)
 
-
-
     if unc_type == UncertaintyType.lnN:
       value = entry.get("value")
+      # print(value)
       if value is None:
         raise RuntimeError("Uncertainty must have a value")
       if isinstance(value, (float, int)):
@@ -99,6 +98,7 @@ class Uncertainty:
         unc.checkValue()
       elif isinstance(value, list) and hasMultipleValues:
         multi_values = {}
+
         for sub_entry in value:
           key_value = (tuple(getPatternList("processes", sub_entry)),
                   tuple(getPatternList("eras", sub_entry)),
@@ -107,9 +107,12 @@ class Uncertainty:
           for key in ["processes", "eras", "channels", "categories"]:
             args[key] = getPatternList(key,sub_entry)
           multi_values[key_value] = sub_entry["value"]
-        unc = MultiValueLnNUncertainty(name, multi_values)
+          if isinstance(sub_entry["value"], list) and len(sub_entry["value"]) == 2:
+            multi_values[key_value] = {UncertaintyScale.Down: sub_entry["value"][0], UncertaintyScale.Up: sub_entry["value"][1]}
+        unc = MultiValueLnNUncertainty(name, multi_values,**args)
         unc.checkValue()
-      elif isinstance(value, list) and len(value) == 2:
+
+      elif isinstance(value, list) and len(value) == 2 and not hasMultipleValues:
         value = {UncertaintyScale.Down: value[0], UncertaintyScale.Up: value[1]}
         unc = LnNUncertainty(name, value, **args)
         unc.checkValue()
@@ -184,8 +187,9 @@ class LnNUncertainty(Uncertainty):
     return SystMap()(value)
 
 class MultiValueLnNUncertainty(Uncertainty):
-  def __init__(self, name, values):
-      self.name = name
+  def __init__(self, name, values, **kwargs):
+      super().__init__(name, **kwargs)
+      # self.name = name
       self.values = values
 
   @property
@@ -212,10 +216,28 @@ class MultiValueLnNUncertainty(Uncertainty):
       for key in self.values.keys():
         processes, eras, channels, categories = key
         value = self.values[key]
-        if not isinstance(value, (int, float)):
-            raise ValueError(f"Invalid uncertainty value: {value}. Must be numeric.")
-        if not isinstance(processes, tuple) or not all(isinstance(p, str) for p in processes):
-            raise ValueError(f"Invalid processes list: {processes}. Must be a list of strings.")
+        pass_zero_check = True
+        pass_sign_check = True
+        pass_magnitude_check = True
+        if type(value) == float:
+
+          if value == 0:
+            pass_zero_check = False
+          if abs(value) >= 1:
+            pass_magnitude_check = False
+        elif type(value) == dict:
+          if value[UncertaintyScale.Down] == 0 or value[UncertaintyScale.Up] == 0:
+            pass_zero_check = False
+          if value[UncertaintyScale.Down] * value[UncertaintyScale.Up] > 0:
+            pass_sign_check = False
+          if abs(value[UncertaintyScale.Down]) >= 1 or abs(value[UncertaintyScale.Up]) >= 1:
+            pass_magnitude_check = False
+        else:
+          raise RuntimeError("Invalid lnN uncertainty value")
+        # if not isinstance(value, (int, float)):
+        #     raise ValueError(f"Invalid uncertainty value: {value}. Must be numeric.")
+        # if not isinstance(processes, tuple) or not all(isinstance(p, str) for p in processes):
+        #     raise ValueError(f"Invalid processes list: {processes}. Must be a list of strings.")
 
   def getUncertaintyForProcess(self, process):
     for key in self.values.keys():
