@@ -25,8 +25,8 @@ def convert_to_json(bins_dict, params):
             for key, value in params.items():
                 entry[key] = [ value ]
             json_dict.append(entry)
-                
-            
+
+
     print(json_dict)
     return json_dict
 
@@ -64,7 +64,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
         hists = { hist_name : file[ch_cat+hist_name] for hist_name in hist_names }
 
         print(f"Starting ch cat {ch_cat}")
-        
+
         signal_name = sig_string #Maybe update to get from yaml later
 
         tmp_signal = np.sum(hists[signal_name].values())
@@ -116,7 +116,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
                         print(f"And the total bkg / tot bkg unc is {tot_bkgs} / {tot_bkgs_unc} = {tot_bkgs/tot_bkgs_unc}")
 
 
-                    if (tot_integral_signal >= big_bin_counter*bin_content_goal) and (np.max(integral_bkgs_unc/integral_bkgs) <= 0.2) and (tot_bkgs_unc/tot_bkgs <= 0.2):       
+                    if (tot_integral_signal >= big_bin_counter*bin_content_goal) and (np.max(integral_bkgs_unc/integral_bkgs) <= 0.2) and (tot_bkgs_unc/tot_bkgs <= 0.2):
                         custom_binning.append(round(hists[signal_name].axis().edges()[left_edge], 2))
                         custom_totals.append(curr_integral_signal)
                         print("At bin ", left_edge, " integral is ", custom_totals[-1])
@@ -202,7 +202,7 @@ if __name__ == '__main__':
             sys.path.append(base_dir)
         __package__ = pkg_dir_name
 
-        from RunKit.run_tools import ps_call
+        from FLAF.RunKit.run_tools import ps_call
         import argparse
         parser = argparse.ArgumentParser(description='Optimize Binning.')
         parser.add_argument('--input-shapes', required=True, type=str, help="input directory of shape files")
