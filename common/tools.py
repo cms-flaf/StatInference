@@ -41,6 +41,7 @@ def rebinAndFill(new_hist, old_hist, epsilon=1e-7):
     old_max = old_axis.GetBinUpEdge(old_axis.GetNbins())
     new_min = new_axis.GetBinLowEdge(1)
     new_max = new_axis.GetBinUpEdge(new_axis.GetNbins())
+    # print(old_min, old_max, new_min, new_max)
     return old_min <= new_min and old_max >= new_max
 
   def get_new_bin(old_axis, new_axis, bin_id_old):
@@ -56,6 +57,10 @@ def rebinAndFill(new_hist, old_hist, epsilon=1e-7):
       new_bins = [ str(new_axis.GetBinLowEdge(n)) for n in range(1, new_axis.GetNbins() + 2)]
       print('old_bins: [{}]'.format(', '.join(old_bins)))
       print('new_bins: [{}]'.format(', '.join(new_bins)))
+      # print(f"bin_low_new = {bin_low_new} , bin_up_new = {bin_up_new}")
+      # print(f"abs(old_up_edge - new_up_edge), {abs(old_up_edge - new_up_edge)}")
+      # print(f"abs(old_up_edge + new_up_edge), {abs(old_up_edge + new_up_edge)} , epsilon {epsilon}")
+      # print(f" epsilon * abs(old_up_edge + new_up_edge) * 2, { epsilon * abs(old_up_edge + new_up_edge) * 2}")
 
       raise RuntimeError("Incompatible bin edges")
     return bin_low_new
@@ -68,7 +73,7 @@ def rebinAndFill(new_hist, old_hist, epsilon=1e-7):
     cnt_upd = cnt_new + cnt_old
     err_upd = math.sqrt(err_new ** 2 + err_old ** 2)
     new_hist.SetBinContent(bin_new, cnt_upd)
-    new_hist.SetBinError(bin_new, err_upd);
+    new_hist.SetBinError(bin_new, err_upd)
 
   n_dim = old_hist.GetDimension()
   if new_hist.GetDimension() != n_dim:
@@ -81,7 +86,7 @@ def rebinAndFill(new_hist, old_hist, epsilon=1e-7):
 
   if n_dim > 1 and not check_range(old_hist.GetYaxis(), new_hist.GetYaxis()):
     raise RuntimeError("y ranges are not compatible")
-
+  # print(old_hist.GetName())
   for x_bin_old in range(old_hist.GetNbinsX() + 2):
     x_bin_new = get_new_bin(old_hist.GetXaxis(), new_hist.GetXaxis(), x_bin_old)
     if n_dim == 1:
