@@ -57,6 +57,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
     #bkg_names = ['TT', 'DY', 'ST', 'VV'] #Moved to an argument
     bkg_names = background_names
 
+
     priority_list = []
     bins_dict = {}
     for cat in categories:
@@ -71,6 +72,12 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
         dict_key = f'{ch}_{cat}'
         hist_names = [ key.split(';')[0][len(ch_cat):] for key in file.keys() if key.startswith(ch_cat) ]
         hists = { hist_name : file[ch_cat+hist_name] for hist_name in hist_names }
+        
+        bkg_names_with_unc = []
+        for bkg_name in bkg_names:
+            for hist_name in hist_names:
+                if hist_name.startswith(bkg_name):
+                    bkg_names_with_unc.append(hist_name)
 
         print(f"Starting ch cat {ch_cat} with mass {mass_list}")
         
@@ -99,7 +106,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
                     tot_bkgs = 0
                     tot_bkgs_unc = 0
                     negative_bins = False
-                    for i, bkg_name in enumerate(bkg_names):
+                    for i, bkg_name in enumerate(bkg_names_with_unc):
                         int_bkg = integrate_uproot(hists[bkg_name], left_edge, right_edge)
                         if int_bkg[0] < 0.0:
                             print(f"Background {bkg_name} has a negative bin, try again")
@@ -127,7 +134,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
                     if (tot_integral_signal >= big_bin_counter*bin_content_goal):
                         print(f"Check out the background unc/tot {integral_bkgs_unc/integral_bkgs}")
                         print(f"Check the backgrounds for empty bins")
-                        for bkg_name in bkg_names:
+                        for bkg_name in bkg_names_with_unc:
                             this_bkg_int = integrate_uproot(hists[bkg_name], left_edge, right_edge)
                             print(f"{bkg_name} has {this_bkg_int[0]} entries and {this_bkg_int[1]} uncertainty")
 
