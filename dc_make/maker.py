@@ -184,6 +184,8 @@ class DatacardMaker:
               raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
             hists.append(self.hist_binner.applyBinning(era, channel, category, model_params, subhist))
         else:
+          if unc_name and unc_scale:
+            hist_name += f"_{unc_name}{unc_scale}"
           hist = file.Get(hist_name)
           if hist == None:
             raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
@@ -278,9 +280,12 @@ class DatacardMaker:
       if unc.needShapes:
         model_params = self.param_bins.get(param_str, None)
         nominal_shape = self.getShape(self.processes[proc], era, channel, category, model_params)
+
+
         for unc_scale in [ UncertaintyScale.Up, UncertaintyScale.Down ]:
           shapes[unc_scale] = self.getShape(self.processes[proc], era, channel, category, model_params,
                                             unc_name, unc_scale.name)
+
       unc_to_apply = unc.resolveType(nominal_shape, shapes, self.autolnNThr, self.asymlnNThr)
       can_ignore = unc_to_apply.canIgnore(unc_value, self.ignorelnNThr) if isMVLnUnc else unc_to_apply.canIgnore(self.ignorelnNThr)
       if can_ignore:
