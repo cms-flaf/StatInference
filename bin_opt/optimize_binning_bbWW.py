@@ -71,8 +71,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
         ch_cat = f'{ch}/{cat}/'
         dict_key = f'{ch}_{cat}'
         hist_names = [ key.split(';')[0][len(ch_cat):] for key in file.keys() if key.startswith(ch_cat) ]
-        hists = { hist_name : file[ch_cat+hist_name] for hist_name in hist_names }
-        
+        hists = { hist_name : file[ch_cat+hist_name] for hist_name in hist_names }  
         bkg_names_with_unc = []
         for bkg_name in bkg_names:
             for hist_name in hist_names:
