@@ -106,7 +106,7 @@ for cat_index in range(first_cat_index, len(categories)):
 
     cat_log = os.path.join(cat_dir, 'results.json')
 
-    opt_cmd = "python tools/optimize_binning.py --input {} --output {} --workers-dir {} --max-n-bins {} --poi {}" \
+    opt_cmd = "python bin_opt/optimize_binning.py --input {} --output {} --workers-dir {} --max-n-bins {} --poi {}" \
               .format(input_card, cat_dir, workers_dir, args.max_n_bins, poi)
     if args.params is not None:
         opt_cmd += ' --params {} '.format(args.params)
@@ -122,7 +122,7 @@ for cat_index in range(first_cat_index, len(categories)):
         raise RuntimeError("Unable to find best binning for {}".format(category))
     cat_best['poi'] = poi
     bin_edges = ', '.join([ str(edge) for edge in cat_best['bin_edges'] ])
-    rebin_cmd = 'python tools/rebinAndRunLimits.py --input {} --output {} --bin-edges "{}" --rebin-only' \
+    rebin_cmd = 'python bin_opt/rebinAndRunLimits.py --input {} --output {} --bin-edges "{}" --rebin-only' \
                 .format(input_card, best_dir, bin_edges)
     sh_call(rebin_cmd, "Error while appllying best binning for {} {}".format(category, args.channel))
     best_binnings[args.channel][category] = cat_best

@@ -19,7 +19,7 @@ if not os.path.isdir(workers_output):
 run_script = '''#!/bin/bash
 cd {}
 source env.sh hh
-python tools/rebinAndRunLimitsWorker.py --output {} --verbose {}
+python bin_opt/rebinAndRunLimitsWorker.py --output {} --verbose {}
 '''.format(os.getcwd(), workers_output, args.verbose)
 script_file = os.path.join(workers_output, 'run_worker.sh')
 with open(script_file, 'w') as f:
