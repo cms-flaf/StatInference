@@ -14,10 +14,22 @@ import time
 from sortedcontainers import SortedSet
 import distutils.util
 
-min_step = 0.001
-min_step_digits = -int(math.log10(min_step))
-step_int_scale = 10 ** min_step_digits
-max_value_int = step_int_scale
+import yaml
+input_binning_opt_config = os.path.join(os.environ["ANALYSIS_PATH"], "StatInference", "bin_opt", "bin_optimization.yaml")
+with open(input_binning_opt_config, "r") as f:
+    input_binning_opt_config_dict = yaml.safe_load(f)
+
+if input_binning_opt_config_dict["input"]["num_original_bins"] == 1000:
+    min_step = 0.001
+    min_step_digits = -int(math.log10(min_step))
+    step_int_scale = 10 ** min_step_digits
+    max_value_int = step_int_scale
+
+if input_binning_opt_config_dict["input"]["num_original_bins"] == 5000:
+    min_step = 0.0002
+    min_step_digits = -(math.log10(min_step))
+    step_int_scale = round(10 ** min_step_digits) 
+    max_value_int = step_int_scale
 
 def HistToNumpy(hist):
     epsilon = 1e-7
@@ -37,6 +49,7 @@ def arrayToStr(a):
     return '[ ' + ', '.join([ str(x) for x in a ]) + ' ]'
 
 class Yields:
+    from sortedcontainers import SortedSet
     def __init__(self, ref_bkgs, n_bins):
         self.n_bins = n_bins
         self.ref_bkgs = ref_bkgs
@@ -65,6 +78,7 @@ class Yields:
             key = (name, unc_variation)
             if key not in self.yields:
                 self.yields[key] = [ np.zeros(self.n_bins), np.zeros(self.n_bins) ]
+
             self.yields[key][0] += yields
             self.yields[key][1] += err2
 
@@ -72,10 +86,13 @@ class Yields:
         total_yield = {}
         for process in self.processes:
             is_ref = process != 'total'
+
             for unc_variation in self.unc_variations:
                 is_central = unc_variation == ''
                 if not is_central and not self.consider_non_central: continue
                 key = (process, unc_variation)
+                if self.yields.get(key, None) is None: continue
+
                 sum = np.sum(self.yields[key][0][start:stop])
                 err2 = np.sum(self.yields[key][1][start:stop])
                 err = math.sqrt(err2)
@@ -95,6 +112,7 @@ class Yields:
                     return False, -1
                 if not is_ref:
                     total_yield[unc_variation] = (sum, err)
+
         rel_err = total_yield[''][1] / total_yield[''][0]
         max_delta = 0
         if self.consider_non_central:
@@ -123,7 +141,27 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
     yields = Yields(ref_bkgs, max_value_int)
 
     input_root = ROOT.TFile.Open(input_shapes)
-    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() ]
+    print(f'Extracting yields from {input_shapes}')
+
+    hist_names = []
+    for key in input_root.GetListOfKeys():
+
+        subdir = input_root.Get(key.GetName())
+        if subdir.IsA().InheritsFrom(ROOT.TDirectory.Class()):
+            hist_names = [str(k.GetName()) for k in subdir.GetListOfKeys()]
+            input_root_dir = input_root.Get(key.GetName())
+            
+        elif subdir.IsA().InheritsFrom(ROOT.TH1.Class()):
+            if str(key.GetName()) not in hist_names:
+                hist_names.append(str(key.GetName()))
+                input_root_dir = input_root
+            else:
+                continue
+
+        else:
+            raise RuntimeError("Check input shape file structure. currently checks inside one subdirectory")
+
+
     nuis_name_regex = re.compile('(.*)_(CMS_.*(Up|Down))')
     for hist_name in sorted(hist_names):
         if nonbkg_regex.match(hist_name) is not None:
@@ -138,7 +176,11 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
         if ignore_variations_regex.match(unc_variation):
             continue
 
-        hist = input_root.Get(hist_name)
+        hist = input_root_dir.Get(hist_name)
+        if hist.IsA().InheritsFrom(ROOT.TH1.Class()) == False:
+            print(f'Skipping non-TH1 object (i.e. TDirectory): {hist_name}')
+            continue
+
         hist_yield, hist_err2 = HistToNumpy(hist)
         yields.addProcess(process, hist_yield, hist_err2, unc_variation)
     input_root.Close()
@@ -239,9 +281,9 @@ class BayesianOptimization:
         self.bounds_transformer = None
         self.optimizer = bayes_opt.BayesianOptimization(f=None, pbounds=bounds, random_state=random_seed, verbose=1)
         self.utilities = [
-            bayes_opt.util.UtilityFunction(kind='ucb', kappa=kappa, xi=xi),# kappa_decay=0.99),
-            bayes_opt.util.UtilityFunction(kind='ei', kappa=kappa, xi=xi),
-            bayes_opt.util.UtilityFunction(kind='poi', kappa=kappa, xi=xi),
+            bayes_opt.acquisition.UpperConfidenceBound(kappa=kappa),
+            bayes_opt.acquisition.ExpectedImprovement(xi=xi),
+            bayes_opt.acquisition.ProbabilityOfImprovement(xi=xi),
         ]
 
         if not os.path.isdir(working_area):
@@ -311,7 +353,8 @@ class BayesianOptimization:
     def suggest(self, utility_index):
         self.optimizer_lock.acquire()
         if self.suggestions is None or len(self.suggestions) == 0:
-            point = self.optimizer.suggest(self.utilities[utility_index])
+            self.optimizer._acquisition_function = self.utilities[utility_index]
+            point = self.optimizer.suggest()
         else:
             point = self.suggestions[0]
             self.suggestions.remove(point)
@@ -435,7 +478,7 @@ class BayesianOptimization:
                     open_request_sleep = open_request_sleep * 2
                     utility_index = (utility_index + 1) % len(self.utilities)
             else:
-                self.print('Equivalent binnig found: {}'.format(arrayToStr(equivalent_binning.edges)))
+                self.print('Equivalent binning found: {}'.format(arrayToStr(equivalent_binning.edges)))
                 self.register(point, len(equivalent_binning.edges), equivalent_binning.exp_limit)
                 n += 1
                 if n >= 5:
@@ -443,6 +486,7 @@ class BayesianOptimization:
                 if n == n_eq_steps - 1:
                     self.print('Waiting for open requests to finish...')
                     self.waitOpenRequestsToFinish()
+
         self.input_queue.put(None)
 
     def JobDispatcher(self):
@@ -508,9 +552,10 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Find optimal binning that minimises the expected limits.')
     parser.add_argument('--input', required=True, type=str, help="input datacard")
+    parser.add_argument('--shape-file', required=True, type=str, help='shape file to optimize')
     parser.add_argument('--output', required=True, type=str, help="output directory")
     parser.add_argument('--workers-dir', required=True, type=str, help="output directory for workers results")
-    parser.add_argument('--max-n-bins', required=True, type=int, help="maximum number of bins")
+    parser.add_argument('--max_n_bins', required=True, type=int, help="maximum number of bins")
     parser.add_argument('--poi', required=False, type=str, default='r', help="parameter of interest")
     parser.add_argument('--params', required=False, type=str, default=None,
                         help="algorithm parameters in format param1=value1,param2=value2 ...")
@@ -522,7 +567,7 @@ if __name__ == '__main__':
 
     input_datacard = os.path.abspath(args.input)
     input_name = os.path.splitext(os.path.basename(input_datacard))[0]
-    input_shapes = os.path.splitext(input_datacard)[0] + '.input.root'
+    input_shapes = os.path.abspath(args.shape_file)
 
     other_datacards = [ os.path.abspath(p) for p in args.other_datacards ]
 
@@ -534,15 +579,13 @@ if __name__ == '__main__':
             if len(p) != 2:
                 raise RuntimeError('invalid parameter definition "{}"'.format(param))
             param_dict[p[0]] = p[1]
-
-    ref_bkgs = {
-        'DY': re.compile('^DY$'),
-        'TT': re.compile('^TT$'),
-    }
+    ref_bkgs = {}
+    for main_bkg in input_binning_opt_config_dict["background"]["main"]:
+        ref_bkgs[f'{main_bkg}'] = re.compile(f'^{main_bkg}$')
 
     nonbkg_regex = re.compile('(data_obs|^ggHH.*|^qqHH.*|^DY_[0-2]b.*)')
     ignore_unc_variations = re.compile('(CMS_bbtt_201[6-8]_DYSFunc[0-9]+|CMS_bbtt_.*_QCDshape)(Up|Down)')
-    print("Extracting yields for background processes...")
+    print("Extracting yields for background processes...", ref_bkgs)
     bkg_yields = ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_unc_variations)
     bkg_yields.printSummary()
 
@@ -567,7 +610,9 @@ if __name__ == '__main__':
                               bkg_yields=bkg_yields,
                               input_queue_size=2, random_seed=None,
                               other_datacards=other_datacards)
+
     bo.maximize(20)
+
 
     print('Minimization finished.')
     print('Best binning: {}'.format(arrayToStr(bo.best_binning.edges)))

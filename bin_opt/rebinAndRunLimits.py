@@ -6,7 +6,30 @@ import shutil
 import subprocess
 import sys
 import ROOT
+import numpy as np
 
+from FLAF.RunKit.run_tools import ps_call
+from FLAF.RunKit.envToJson import get_cmsenv
+from inference.dhi.scripts.remove_processes import remove_processes
+from inference.dhi.scripts.remove_parameters import remove_parameters
+
+#These lines ensure that the script can import sibling or parent modules/packages, even when executed as a standalone script, by adjusting the Python path and package context dynamically. useful when running scripts from the command line.
+file_dir = os.path.dirname(os.path.abspath(__file__))
+pkg_dir = os.path.dirname(file_dir)
+base_dir = os.path.dirname(pkg_dir)
+pkg_dir_name = os.path.split(pkg_dir)[1]
+if base_dir not in sys.path:
+    sys.path.append(base_dir)
+__package__ = pkg_dir_name
+
+import yaml
+input_binning_opt_config = os.path.join(os.environ["ANALYSIS_PATH"], "StatInference", "bin_opt", "bin_optimization.yaml")
+with open(input_binning_opt_config, "r") as f:
+    input_binning_opt_config_dict = yaml.safe_load(f)
+
+clean_env = {k: os.environ[k] for k in [
+    'HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'ANALYSIS_SOFT_PATH', 'FLAF_CMSSW_BASE'
+] if k in os.environ}
 
 def sh_call(cmd, error_message, verbose=0):
     if verbose > 0:
@@ -108,28 +131,64 @@ def FixNegativeContributions(histogram):
         histogram.Scale(original_integral / new_integral)
     return True
 
-def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=0, rebin_only=False, other_datacards=[]):
-    input_name = os.path.splitext(os.path.basename(input_datacard))[0]
-    input_shapes = os.path.splitext(input_datacard)[0] + '.input.root'
-    output_datacard = os.path.join(output_dir, input_name + '.txt')
-    output_shapes = os.path.join(output_dir, input_name + '.input.root')
+def shape_file_name(input_datacard):
+    shape_files = []
+    with open(input_datacard, 'r') as f:
+        for line in f:
+            shape_line_parts = []
+            if line.startswith('shapes'):
+                shape_line_parts = line.split(' ')
+            shape_files.extend(x for x in shape_line_parts if x.endswith('.root'))
+    return shape_files
 
+def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=False, other_datacards=[]):
+    input_name = os.path.splitext(os.path.basename(input_datacard))[0]
+    input_shapes = shape_file_name(input_datacard)[0]
+    output_datacard = os.path.join(output_dir, input_name + '.txt')
+    output_shapes = os.path.join(output_dir, input_shapes)
+    print('inside GetLimits')
+    print(f'input_datacard: {input_datacard}')
+    print(f'input_name: {input_name}')
+    print(f'input_shapes: {input_shapes}')
+    print(f'output_datacard: {output_datacard}')
+    print(f'output_shapes: {output_shapes}')
     if verbose > 0:
         print("Preparing datacards and shapes...")
     if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
     for out_file in [output_datacard, output_shapes]:
         if os.path.exists(out_file):
             os.remove(out_file)
     shutil.copy(input_datacard, output_datacard)
-    input_root = ROOT.TFile.Open(input_shapes)
+    input_root = ROOT.TFile.Open(os.path.dirname(input_datacard) + '/'+ input_shapes)
     output_root = ROOT.TFile(output_shapes, 'RECREATE', '', 209)
     bin_edges_v = ListToVector(bin_edges, 'double')
 
     processes_to_remove = []
     nuissances_to_remove = []
 
-    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() ]
+    hist_names = []
+    for key in input_root.GetListOfKeys():
+
+        subdir = input_root.Get(key.GetName())
+        if subdir.IsA().InheritsFrom(ROOT.TDirectory.Class()):
+            hist_names = [str(k.GetName()) for k in subdir.GetListOfKeys()]
+            input_root_dir = input_root.Get(key.GetName())
+            output_root.mkdir(key.GetName())
+            output_root_dir = output_root.Get(key.GetName())
+            
+        elif subdir.IsA().InheritsFrom(ROOT.TH1.Class()):
+            if str(key.GetName()) not in hist_names:
+                hist_names.append(str(key.GetName()))
+                input_root_dir = input_root
+                output_root_dir = output_root
+            else:
+                continue
+
+        else:
+            raise RuntimeError("Check input shape file structure. currently checks inside one subdirectory")
+
+
     name_regex = re.compile('(.*)_(CMS_.*)(Up|Down)')
 
     ROOT.TH1.AddDirectory(False)
@@ -144,11 +203,16 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=0, rebin_only=
             process_name = hist_name
             is_central = True
         if process_name in processes_to_remove: continue
-        hist_orig = input_root.Get(hist_name)
+
+        hist_orig = input_root_dir.Get(hist_name)
+        if hist_orig.IsA().InheritsFrom(ROOT.TH1.Class()) == False:
+            if verbose > 1:
+                print('Skipping non-histogram object (i.e. TDirectory): {}'.format(hist_name))
+            continue
         hist_new = ROOT.TH1F(hist_name, hist_orig.GetTitle(), bin_edges_v.size() - 1, bin_edges_v.data())
         RebinAndFill(hist_new, hist_orig)
         if FixNegativeContributions(hist_new):
-            output_root.WriteTObject(hist_new, hist_name, 'Overwrite')
+            output_root_dir.WriteTObject(hist_new, hist_name, 'Overwrite')
         else:
             if is_central:
                 processes_to_remove.append(process_name)
@@ -157,20 +221,27 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=0, rebin_only=
 
     input_root.Close()
     output_root.Close()
-
     if len(processes_to_remove):
         proc_str = " ".join(processes_to_remove)
         if verbose > 0:
             print("Removing processes: {}".format(proc_str))
-        sh_call('remove_processes.py {} {}'.format(output_datacard, proc_str),
-                'Error while running remove_processes.py', verbose)
+        try:
+            cmd_rm_processes = "remove_processes.py {output_datacard} {proc_str} -d 'none'".format(output_datacard=output_datacard, proc_str=proc_str)
+            ps_call("bash -c 'source ../inference/setup.sh && " + cmd_rm_processes + " && source ../env.sh'", shell=True, env=clean_env, verbose=verbose)
+        except Exception as e:
+            print(f"Warning: Failed to remove processes {proc_str}: {e}")
+            print("Continuing without removing processes...")
 
     if len(nuissances_to_remove):
         nuis_str = " ".join(nuissances_to_remove)
         if verbose > 0:
             print("Removing nuissances: {}".format(nuis_str))
-        sh_call('remove_parameters.py {} {}'.format(output_datacard, nuis_str),
-                'Error while running remove_parameters.py', verbose)
+        try:
+            cmd_rm_parameter = "remove_parameters.py {output_datacard} {nuis_str} -d 'none'".format(output_datacard=output_datacard, nuis_str=nuis_str)
+            ps_call("bash -c 'source ../inference/setup.sh && " + cmd_rm_parameter + " && source ../env.sh'", shell=True, env=clean_env, verbose=verbose)
+        except Exception as e:
+            print(f"Warning: Failed to remove parameters {nuis_str}: {e}")
+            print("Continuing without removing parameters...")
     if rebin_only:
         return
     if verbose > 0:
@@ -178,16 +249,66 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=0, rebin_only=
     version = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     datacards_str = output_datacard
     if len(other_datacards):
-        datacards_str += ',' + ','.join(other_datacards)
-    law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
-              .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
-    output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
+        copied_other_datacards = []
+        for other_datacard in other_datacards:
+            other_basename = os.path.basename(other_datacard)
+            other_shapes = os.path.dirname(other_datacard) + '/' + shape_file_name(other_datacard)[0]
+            
+            current_worker_dir_datacard = os.path.join(output_dir, other_basename)
+            current_worker_dir_shapes = os.path.join(output_dir, os.path.basename(other_shapes))
+            if os.path.exists(other_datacard):
+                shutil.copy(other_datacard, current_worker_dir_datacard)
+                copied_other_datacards.append(current_worker_dir_datacard)
+                if verbose > 0:
+                    print(f"Copied other datacard {other_datacard} to {current_worker_dir_datacard}")
+            else:
+                print(f"Warning: Other datacard not found: {other_datacard}")
+                continue
+                
+            if os.path.exists(other_shapes):
+                shutil.copy(other_shapes, current_worker_dir_shapes)
+                if verbose > 0:
+                    print(f"Copied other shapes {other_shapes} to {current_worker_dir_shapes}")
+            else:
+                print(f"Warning: Other shapes file not found: {other_shapes}")
+
+        if copied_other_datacards:
+            datacards_str += ',' + ','.join(copied_other_datacards)
+
+    if input_binning_opt_config_dict["analysis"]=="hh_bbtautau" and input_binning_opt_config_dict["analysis_type"]=="nonresonant":
+        law_cmd = "law run {} --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}".format(input_binning_opt_config_dict["inference"]["law_task"], version, input_binning_opt_config_dict["inference"]["hh_model"], datacards_str, poi, input_binning_opt_config_dict["inference"]["scan_parameters"])
+
+    if input_binning_opt_config_dict["analysis"]=="hh_bbww" and input_binning_opt_config_dict["analysis_type"]=="resonant":
+        law_cmd = "law run {} --version {} --datacards {} --remove-output 3,a,y".format(input_binning_opt_config_dict["inference"]["law_task"],version, datacards_str)
+
+
+    output = ps_call(
+        "bash -c 'source ../inference/setup.sh && " + law_cmd +
+        " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate " +
+        "'",
+        shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n"
+        )
+
+    def check_combine_processes():
+        result = subprocess.run("ps aux | grep combine | grep -v grep", shell=True, capture_output=True, text=True)
+        print(result.stdout)
+    check_combine_processes()
 
     if verbose > 0:
         print("Removing outputs...")
-    sh_call(law_cmd + ' --remove-output 2,a ', "Error while removing combine outputs", verbose)
+
+    ps_call(
+        "bash -c ' source ../inference/setup.sh && " +
+        law_cmd + " --remove-output 2,a,y " +
+        " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
+        shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n"
+    )
+
+    returned_code, output_lines, _ = output
     limit_regex = re.compile('^Expected 50.0%: {} < ([0-9\.]+)'.format(poi))
-    for line in reversed(output):
+    for line in reversed(output_lines):
+        if not isinstance(line, str) or line is None:
+            continue
         lim = limit_regex.match(line)
         if lim is not None:
             return float(lim.group(1))
@@ -214,7 +335,7 @@ if __name__ == '__main__':
     limit = GetLimits(args.input, args.output, bin_edges, args.poi, verbose=args.verbose, rebin_only=args.rebin_only,
                       other_datacards=args.other_datacards)
     if args.rebin_only:
-        print('Datacars have been prepared')
+        print('Datacard has been prepared')
     else:
         if args.verbose > 0:
             print('Expected 95% CL limit = {}'.format(limit))
