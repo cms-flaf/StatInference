@@ -33,8 +33,9 @@ while True:
         bin_edges = params['bin_edges']
         if args.verbose > 0:
             print('Bin edges: [ {} ]'.format(', '.join([ str(b) for b in bin_edges ])))
-        limit = GetLimits(params['input_datacard'], worker_dir, bin_edges, params['poi'], verbose=0,
+        limit = GetLimits(params['input_datacard'], worker_dir, bin_edges, params['poi'], verbose=1,
                           other_datacards=params['other_datacards'])
+        print('back in rebinAndRunLimitsWorker after running limits')
         if args.verbose > 0:
             print('Expected 95% CL limit = {}'.format(limit))
         result = {

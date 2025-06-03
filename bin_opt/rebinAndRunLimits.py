@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import ROOT
+import numpy as np
 
 
 def sh_call(cmd, error_message, verbose=0):
@@ -63,6 +64,15 @@ def RebinAndFill(new_hist, old_hist):
 
         new_hist.SetBinContent(bin_new, cnt_upd)
         new_hist.SetBinError(bin_new, err_upd);
+    
+    def check_hist_for_nan_inf_neg(hist, hist_old_new, name):
+        arr = np.array([hist.GetBinContent(i+1) for i in range(hist.GetNbinsX())])
+        if np.any(np.isnan(arr)):
+            print(f'NaN found in {hist_old_new} {name}')
+        if np.any(np.isinf(arr)):
+            print(f'Inf found in {hist_old_new} {name}')
+        if np.any(arr < 0):
+            print(f'Negative values found in {hist_old_new} {name}')
 
     n_dim = old_hist.GetDimension()
     if new_hist.GetDimension() != n_dim:
@@ -76,6 +86,8 @@ def RebinAndFill(new_hist, old_hist):
     if n_dim > 1 and not check_range(old_hist.GetYaxis(), new_hist.GetYaxis()):
         raise RuntimeError("y ranges are not compatible")
 
+    # check_hist_for_nan_inf_neg(old_hist, 'old_hist', old_hist.GetName())
+
     for x_bin_old in range(old_hist.GetNbinsX() + 2):
         x_bin_new = get_new_bin(old_hist.GetXaxis(), new_hist.GetXaxis(), x_bin_old)
         if n_dim == 1:
@@ -86,12 +98,15 @@ def RebinAndFill(new_hist, old_hist):
                 bin_old = old_hist.GetBin(x_bin_old, y_bin_old)
                 bin_new = new_hist.GetBin(x_bin_new, y_bin_new)
                 add_bin_content(bin_old, bin_new)
+    
+    check_hist_for_nan_inf_neg(new_hist, 'new_hist', new_hist.GetName())
 
 def FixNegativeContributions(histogram):
     correction_factor = 1e-7
 
     original_integral = histogram.Integral()
-    if original_integral <= 0:
+    if original_integral < 1e-6: #<= 0:
+        print(f'original integral is too small: {original_integral}')
         return False
 
     has_fixed_bins = False
@@ -108,12 +123,16 @@ def FixNegativeContributions(histogram):
         histogram.Scale(original_integral / new_integral)
     return True
 
-def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=0, rebin_only=False, other_datacards=[]):
+def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=False, other_datacards=[]):
     input_name = os.path.splitext(os.path.basename(input_datacard))[0]
     input_shapes = os.path.splitext(input_datacard)[0] + '.input.root'
     output_datacard = os.path.join(output_dir, input_name + '.txt')
     output_shapes = os.path.join(output_dir, input_name + '.input.root')
-
+    print('inside GetLimits')
+    print(f'input_name: {input_name}')
+    print(f'input_shapes: {input_shapes}')
+    print(f'output_datacard: {output_datacard}')
+    print(f'output_shapes: {output_shapes}')
     if verbose > 0:
         print("Preparing datacards and shapes...")
     if not os.path.exists(output_dir):
@@ -148,6 +167,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=0, rebin_only=
         hist_new = ROOT.TH1F(hist_name, hist_orig.GetTitle(), bin_edges_v.size() - 1, bin_edges_v.data())
         RebinAndFill(hist_new, hist_orig)
         if FixNegativeContributions(hist_new):
+            # print(f'Fixed negative contributions in {hist_name}')
             output_root.WriteTObject(hist_new, hist_name, 'Overwrite')
         else:
             if is_central:
@@ -157,7 +177,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=0, rebin_only=
 
     input_root.Close()
     output_root.Close()
-
+    print('input and output files closed')
     if len(processes_to_remove):
         proc_str = " ".join(processes_to_remove)
         if verbose > 0:
@@ -181,6 +201,12 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=0, rebin_only=
         datacards_str += ',' + ','.join(other_datacards)
     law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
               .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
+    print('finsihed running law command')
+    def check_combine_processes():
+        result = subprocess.run("ps aux | grep combine | grep -v grep", shell=True, capture_output=True, text=True)
+        print(result.stdout)
+    check_combine_processes()
+    
     output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
 
     if verbose > 0:

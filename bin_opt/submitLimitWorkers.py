@@ -12,15 +12,18 @@ parser.add_argument('--verbose', required=False, type=int, default=1, help="verb
 args = parser.parse_args()
 
 workers_output = os.path.join(args.output, args.channel, "workers")
-
+print(f'workers_output {workers_output}')
 if not os.path.isdir(workers_output):
     raise RuntimeError("Workers output directory not found. Please, make sure that the server is running.")
 
-run_script = '''#!/bin/bash
-cd {}
-source env.sh hh
-python bin_opt/rebinAndRunLimitsWorker.py --output {} --verbose {}
-'''.format(os.getcwd(), workers_output, args.verbose)
+# run_script = '''#!/bin/bash
+# cd {}
+# source env.sh hh
+# python bin_opt/rebinAndRunLimitsWorker.py --output {} --verbose {}
+# '''.format(os.getcwd(), workers_output, args.verbose)
+run_script = f'''
+python3 bin_opt/rebinAndRunLimitsWorker.py --output {workers_output} --verbose {args.verbose}
+'''
 script_file = os.path.join(workers_output, 'run_worker.sh')
 with open(script_file, 'w') as f:
     f.write(run_script)

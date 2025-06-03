@@ -23,6 +23,8 @@ def HistToNumpy(hist):
     epsilon = 1e-7
     x = np.zeros(max_value_int)
     x_err2 = np.zeros(max_value_int)
+    # print(f'Debug: Histogram {hist.GetName()} has {hist.GetNbinsX()} bins, expected {max_value_int} bins.')
+
     if hist.GetNbinsX() != max_value_int:
         raise RuntimeError("Inconsistent number of bins")
     for n in range(max_value_int):
@@ -42,7 +44,9 @@ class Yields:
         self.ref_bkgs = ref_bkgs
         self.yields = {}
         self.processes = SortedSet([ 'total' ] + list(ref_bkgs.keys()))
+        # print(f'debug: self.processes: {self.processes}')
         self.input_processes = SortedSet()
+        # print(f'debug: self.input_processes: {self.input_processes}')
         self.unc_variations = SortedSet([''])
         self.ref_bkg_thr = 1e-7
         self.total_bkg_thr = 0.03 #0.18
@@ -55,27 +59,42 @@ class Yields:
     def addProcess(self, process, yields, err2, unc_variation):
         names = [ 'total' ]
         for ref_bkg_name, ref_bkg_regex in self.ref_bkgs.items():
+            # print(f'Debug: ref_bkg_name: {ref_bkg_name}, ref_bkg_regex: {ref_bkg_regex}, process: {process}')
             if ref_bkg_regex.match(process) is not None:
                 names.append(ref_bkg_name)
         if process not in self.input_processes:
             self.input_processes.add(process)
+            # print(f'debug: Added process {process} to input_processes: {self.input_processes}')
         for name in names:
             if unc_variation not in self.unc_variations:
                 self.unc_variations.add(unc_variation)
             key = (name, unc_variation)
+            # print(f'key: {key}')
+            # print(f'self.yields {self.yields}')
             if key not in self.yields:
+                # print(f'self.n_bins {self.n_bins} np.zeros(self.n_bins) {np.zeros(self.n_bins)}')
                 self.yields[key] = [ np.zeros(self.n_bins), np.zeros(self.n_bins) ]
             self.yields[key][0] += yields
             self.yields[key][1] += err2
 
     def test(self, start, stop, yield_thr):
         total_yield = {}
+        # print(f'Debug: self.processes {self.processes}')
         for process in self.processes:
+            # print(f'Debug: process {process}')
             is_ref = process != 'total'
+            # print(f'Debug: self.unc_variations {self.unc_variations}')
             for unc_variation in self.unc_variations:
+                # print(f'Debug: unc_variation {unc_variation}')
                 is_central = unc_variation == ''
+                # print(f'Debug: is_central {is_central}, self.consider_non_central {self.consider_non_central}')
                 if not is_central and not self.consider_non_central: continue
                 key = (process, unc_variation)
+                # print(f'Debug: key {key}')
+                # print(f'Debug: self.yields.get(key, None) {self.yields.get(key, None)}')
+                # print(f'Debug: self.yields[key][0] {self.yields[key][0]} ')
+                # print(f'Debug: self.yields[key][1] {self.yields[key][1]}')
+                if self.yields.get(key, None) is None: continue
                 sum = np.sum(self.yields[key][0][start:stop])
                 err2 = np.sum(self.yields[key][1][start:stop])
                 err = math.sqrt(err2)
@@ -123,6 +142,7 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
     yields = Yields(ref_bkgs, max_value_int)
 
     input_root = ROOT.TFile.Open(input_shapes)
+    print(f'Extracting yields from {input_shapes}')
     hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() ]
     nuis_name_regex = re.compile('(.*)_(CMS_.*(Up|Down))')
     for hist_name in sorted(hist_names):
@@ -239,9 +259,12 @@ class BayesianOptimization:
         self.bounds_transformer = None
         self.optimizer = bayes_opt.BayesianOptimization(f=None, pbounds=bounds, random_state=random_seed, verbose=1)
         self.utilities = [
-            bayes_opt.util.UtilityFunction(kind='ucb', kappa=kappa, xi=xi),# kappa_decay=0.99),
-            bayes_opt.util.UtilityFunction(kind='ei', kappa=kappa, xi=xi),
-            bayes_opt.util.UtilityFunction(kind='poi', kappa=kappa, xi=xi),
+            # bayes_opt.util.UtilityFunction(kind='ucb', kappa=kappa, xi=xi),# kappa_decay=0.99), # supported in bayes_opt.__version__ <2.0.0
+            # bayes_opt.util.UtilityFunction(kind='ei', kappa=kappa, xi=xi),
+            # bayes_opt.util.UtilityFunction(kind='poi', kappa=kappa, xi=xi),
+            bayes_opt.acquisition.UpperConfidenceBound(kappa=kappa),
+            bayes_opt.acquisition.ExpectedImprovement(xi=xi),
+            bayes_opt.acquisition.ProbabilityOfImprovement(xi=xi),
         ]
 
         if not os.path.isdir(working_area):
@@ -311,7 +334,8 @@ class BayesianOptimization:
     def suggest(self, utility_index):
         self.optimizer_lock.acquire()
         if self.suggestions is None or len(self.suggestions) == 0:
-            point = self.optimizer.suggest(self.utilities[utility_index])
+            # point = self.optimizer.suggest(self.utilities[utility_index]) # bayes_opt.__version__ >=2.0.0 does not support passing utility functions
+            point = self.optimizer.suggest()
         else:
             point = self.suggestions[0]
             self.suggestions.remove(point)
@@ -411,6 +435,7 @@ class BayesianOptimization:
         utility_index = 0
         open_request_sleep = 1
         while n < n_eq_steps:
+            print(f'PointGenerator: n {n}, n_eq_steps {n_eq_steps}')
             point = self.suggest(utility_index)
 
             rel_thrs = np.zeros(len(point))
@@ -443,18 +468,24 @@ class BayesianOptimization:
                 if n == n_eq_steps - 1:
                     self.print('Waiting for open requests to finish...')
                     self.waitOpenRequestsToFinish()
+        print('PointGenerator')
         self.input_queue.put(None)
 
     def JobDispatcher(self):
         while True:
+            print('JobDispatcher')
             time.sleep(1)
+            print(f'self.workers_dir {self.workers_dir}')
             for worker_dir in os.listdir(self.workers_dir):
                 worker_dir = os.path.join(self.workers_dir, worker_dir)
+                # print(f'os.path.isdir(worker_dir) {os.path.isdir(worker_dir)} {worker_dir}')
                 if not os.path.isdir(worker_dir): continue
                 task_file = os.path.join(worker_dir, 'task.txt')
                 task_file_tmp = os.path.join(worker_dir, '.task.txt')
+                print(f'os.path.isfile(task_file) {os.path.isfile(task_file)}')
                 if os.path.isfile(task_file):
                     result_file = os.path.join(worker_dir, 'result.txt')
+                    print(f'os.path.isfile(result_file) {os.path.isfile(result_file)}')
                     if os.path.isfile(result_file):
                         with open(result_file, 'r') as f:
                             result = json.load(f)
@@ -472,6 +503,7 @@ class BayesianOptimization:
                         os.remove(result_file)
                 else:
                     try:
+                        print('task.txt doesnt exist')
                         binning = self.input_queue.get(True, 1)
                         if binning is None: return
                         task = {
@@ -482,6 +514,7 @@ class BayesianOptimization:
                         }
                         with open(task_file_tmp, 'w') as f:
                             json.dump(task, f)
+                            print(f'Task written to {task_file_tmp}')
                         shutil.move(task_file_tmp, task_file)
                     except queue.Empty:
                         pass
@@ -536,7 +569,7 @@ if __name__ == '__main__':
             param_dict[p[0]] = p[1]
 
     ref_bkgs = {
-        'DY': re.compile('^DY$'),
+        'DY': re.compile(r'^DY.*$'),
         'TT': re.compile('^TT$'),
     }
 
@@ -567,7 +600,9 @@ if __name__ == '__main__':
                               bkg_yields=bkg_yields,
                               input_queue_size=2, random_seed=None,
                               other_datacards=other_datacards)
+    print("here")
     bo.maximize(20)
+    print("here here")
 
     print('Minimization finished.')
     print('Best binning: {}'.format(arrayToStr(bo.best_binning.edges)))
