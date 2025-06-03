@@ -201,13 +201,13 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         datacards_str += ',' + ','.join(other_datacards)
     law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
               .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
-    print('finsihed running law command')
+ 
+    output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
+    print('this is sad')
     def check_combine_processes():
         result = subprocess.run("ps aux | grep combine | grep -v grep", shell=True, capture_output=True, text=True)
         print(result.stdout)
     check_combine_processes()
-    
-    output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
 
     if verbose > 0:
         print("Removing outputs...")
