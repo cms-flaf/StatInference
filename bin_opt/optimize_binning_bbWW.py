@@ -72,11 +72,15 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
         dict_key = f'{ch}_{cat}'
         hist_names = [ key.split(';')[0][len(ch_cat):] for key in file.keys() if key.startswith(ch_cat) ]
         hists = { hist_name : file[ch_cat+hist_name] for hist_name in hist_names }
+
+
+        
         
         bkg_names_with_unc = []
         for bkg_name in bkg_names:
+            if ch == 'eMu' and bkg_name.startswith('DY'): continue # Pull this from config eventually
             for hist_name in hist_names:
-                if hist_name.startswith(bkg_name):
+                if hist_name == bkg_name or hist_name.startswith(bkg_name+"_"): # Have to be careful with the names, eg 'TT' and 'TTVV' both startwith 'TT', but we want 'TT_JerUp'
                     bkg_names_with_unc.append(hist_name)
 
         print(f"Starting ch cat {ch_cat} with mass {mass_list}")
@@ -86,6 +90,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
         tmp_signal = np.sum(hists[signal_name].values())
 
         #Start the loop over nBins from 1 to nBinsMax
+        patience = 0
         for nbins in range(1, nBinsMax):
             bin_content_goal = tmp_signal/nbins
 
@@ -108,8 +113,8 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
                     negative_bins = False
                     for i, bkg_name in enumerate(bkg_names_with_unc):
                         int_bkg = integrate_uproot(hists[bkg_name], left_edge, right_edge)
-                        if int_bkg[0] < 0.0:
-                            print(f"Background {bkg_name} has a negative bin, try again")
+                        if int_bkg[0] <= 0.0:
+                            # print(f"Background {bkg_name} has a negative or empty bin, try again")
                             negative_bins = True
                         if bkg_name in important_backgrounds: #Only check important backgrounds for the individual tests
                             integral_bkgs[i] = int_bkg[0]
@@ -136,7 +141,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
                         print(f"Check the backgrounds for empty bins")
                         for bkg_name in bkg_names_with_unc:
                             this_bkg_int = integrate_uproot(hists[bkg_name], left_edge, right_edge)
-                            print(f"{bkg_name} has {this_bkg_int[0]} entries and {this_bkg_int[1]} uncertainty")
+                            # print(f"{bkg_name} has {this_bkg_int[0]} entries and {this_bkg_int[1]} uncertainty")
 
                         print(f"And the total bkg / tot bkg unc is {tot_bkgs} / {tot_bkgs_unc} = {tot_bkgs/tot_bkgs_unc}")
 
@@ -149,6 +154,8 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
                         big_bin_counter+=1
                         break
 
+            if len(custom_binning) < 2:
+                raise ValueError(f"Custom binning for {dict_key} is too small, only {len(custom_binning)} bins found, something went wrong!")
             print("Found the bin edge set, it is ", custom_binning)
             print("With totals per bin as ", custom_totals)
 
@@ -193,15 +200,21 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
             limit_list.append(exp_limit)
 
             #If adding a bin does not improve (limit stays the same) then just move on
-            if (exp_limit <= best_limit) or (nbins == 1):
+            if (exp_limit < best_limit) or (nbins == 1):
                 best_limit = exp_limit
                 best_bins = bins_dict.copy()
+                patience = 0
 
             else:
                 print(f"Did not improve limits at nbins {nbins}, best limit was {best_limit}, and current was {exp_limit}")
-                #Need to replace the bin dict because it now has the 'worse' new binning
-                bins_dict = best_bins.copy()
-                break
+                # I don't want to let it go to nMax each time, but also don't want to give up too early
+                # Introduce patience, allow 3 consecutive 'worse' limits before giving up
+                patience += 1
+                print(f"Patience now set to {patience}")
+                if patience >= 3:
+                    #Need to replace the bin dict because it now has the 'worse' new binning
+                    bins_dict = best_bins.copy()
+                    break
 
 
 
