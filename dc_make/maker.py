@@ -27,6 +27,7 @@ class DatacardMaker:
     self.categories = cfg["categories"]
     self.signalFractionForRelevantBins = cfg['signalFractionForRelevantBins']
 
+
     self.bins = []
     for era, channel, cat in self.ECC():
       bin = self.getBin(era, channel, cat, return_index=False)
@@ -37,6 +38,10 @@ class DatacardMaker:
     self.processes = {}
     data_process = None
     has_signal = False
+    self.channel_processes = {}
+    for channel in self.channels:
+      self.channel_processes[channel] = []
+
     for process in cfg["processes"]:
       if (type(process) != str) and process.get('is_signal', False):
         if param_values is not None:
@@ -48,6 +53,15 @@ class DatacardMaker:
           raise RuntimeError(f"Process name {process.name} already exists")
         print(f"Adding {process}")
         self.processes[process.name] = process
+        if process.channels:
+          for channel in process.channels:
+            if channel not in self.channel_processes:
+              print(f"Channel {channel} not defined in config")
+              continue
+            self.channel_processes[channel].append(process.name)
+        else:
+          for channel in self.channels:
+            self.channel_processes[channel].append(process.name)
         if process.is_data:
           if data_process is not None:
             raise RuntimeError("Multiple data processes defined")
@@ -79,6 +93,7 @@ class DatacardMaker:
 
     hist_bins = hist_bins or cfg.get("hist_bins", None)
     self.hist_binner = Binner(hist_bins)
+    # print(f"Using hist_bins: {self.hist_binner.hist_bins}")
 
     self.input_files = {}
     self.shapes = {}
@@ -164,6 +179,8 @@ class DatacardMaker:
         hist = None
         for bkg_proc in self.processes.values():
           if bkg_proc.is_background:
+            if bkg_proc.name not in self.channel_processes[channel]: 
+              continue
             bkg_hist = self.getShape(bkg_proc, era, channel, category, model_params)
             if hist is None:
               hist = bkg_hist.Clone()
@@ -264,6 +281,8 @@ class DatacardMaker:
     unc = self.uncertainties[unc_name]
     isMVLnUnc = isinstance(unc, MultiValueLnNUncertainty)
     for proc, param_str, era, channel, category in self.PPECC():
+      if proc not in self.channel_processes[channel]: 
+        continue
       process = self.processes[proc]
       if process.is_data: continue
       model_params = self.param_bins.get(param_str, None)
@@ -347,6 +366,8 @@ class DatacardMaker:
     try:
       for era, channel, category in self.ECC():
         for process_name in self.processes.keys():
+          if process_name not in self.channel_processes[channel]: 
+            continue
           self.addProcess(process_name, era, channel, category)
       for unc_name in self.uncertainties.keys():
         print(f"adding uncertainty: {unc_name}")
