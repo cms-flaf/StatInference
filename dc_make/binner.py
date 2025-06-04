@@ -40,6 +40,9 @@ class Binner:
             raise RuntimeError(f"Multiple binnings found for era/channel/category/params {era}/{channel}/{category}/{model_params}")
 
         new_hist = ROOT.TH1F(hist.GetName(), hist.GetTitle(), len(new_binning[0]) - 1,new_binning[0].data())
+        # print(hist.GetName())
+        if hist.GetEntries() == 0:
+            return new_hist
         rebinAndFill(new_hist, hist)
         return new_hist
 
