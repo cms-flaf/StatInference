@@ -72,13 +72,9 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
         dict_key = f'{ch}_{cat}'
         hist_names = [ key.split(';')[0][len(ch_cat):] for key in file.keys() if key.startswith(ch_cat) ]
         hists = { hist_name : file[ch_cat+hist_name] for hist_name in hist_names }
-
-
-        
-        
         bkg_names_with_unc = []
         for bkg_name in bkg_names:
-            if ch == 'eMu' and bkg_name.startswith('DY'): continue # Pull this from config eventually
+            if ch == 'eMu' and bkg_name.startswith('DY'): continue # Pull this from config eventually, for now only bbWW (devin) uses this so its no big deal
             for hist_name in hist_names:
                 if hist_name == bkg_name or hist_name.startswith(bkg_name+"_"): # Have to be careful with the names, eg 'TT' and 'TTVV' both startwith 'TT', but we want 'TT_JerUp'
                     bkg_names_with_unc.append(hist_name)
@@ -200,7 +196,7 @@ def optimize_binning(shapes_dir, filename, sig_string, params, mass_list, outdir
             limit_list.append(exp_limit)
 
             #If adding a bin does not improve (limit stays the same) then just move on
-            if (exp_limit < best_limit) or (nbins == 1):
+            if (exp_limit <= best_limit) or (nbins == 1):
                 best_limit = exp_limit
                 best_bins = bins_dict.copy()
                 patience = 0
