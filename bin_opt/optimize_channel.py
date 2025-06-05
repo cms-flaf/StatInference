@@ -94,7 +94,7 @@ while first_cat_index < len(categories) and categories[first_cat_index][0] in be
 for cat_index in range(first_cat_index, len(categories)):
     category, poi = categories[cat_index]
     print("Optimising {} {}...".format(args.channel, category))
-    input_card = '{}/hh_{}_{}_13TeV.txt'.format(args.input, category, args.channel)
+    input_card = f'{args.input}/hh_{category}_{args.channel}_13TeV.txt' # or more generally, f'{args.input}/*.txt'
     cat_dir = os.path.join(output_dir, category)
     if not os.path.isdir(cat_dir):
         os.mkdir(cat_dir)
@@ -106,10 +106,9 @@ for cat_index in range(first_cat_index, len(categories)):
 
     cat_log = os.path.join(cat_dir, 'results.json')
 
-    opt_cmd = "python bin_opt/optimize_binning.py --input {} --output {} --workers-dir {} --max-n-bins {} --poi {}" \
-              .format(input_card, cat_dir, workers_dir, args.max_n_bins, poi)
+    opt_cmd = f"python bin_opt/optimize_binning.py --input {input_card} --output {cat_dir} --workers-dir {workers_dir} --max-n-bins {args.max_n_bins} --poi {poi}"
     if args.params is not None:
-        opt_cmd += ' --params {} '.format(args.params)
+        opt_cmd += f" --params {args.params} "
     for cat_idx in range(cat_index):
         cat = categories[cat_idx][0]
         other_cat_file = '{}/hh_{}_{}_13TeV.txt'.format(best_dir, cat, args.channel)
@@ -122,9 +121,8 @@ for cat_index in range(first_cat_index, len(categories)):
         raise RuntimeError("Unable to find best binning for {}".format(category))
     cat_best['poi'] = poi
     bin_edges = ', '.join([ str(edge) for edge in cat_best['bin_edges'] ])
-    rebin_cmd = 'python bin_opt/rebinAndRunLimits.py --input {} --output {} --bin-edges "{}" --rebin-only' \
-                .format(input_card, best_dir, bin_edges)
-    sh_call(rebin_cmd, "Error while appllying best binning for {} {}".format(category, args.channel))
+    rebin_cmd = f'python bin_opt/rebinAndRunLimits.py --input {input_card} --output {best_dir} --bin-edges "{bin_edges}" --rebin-only '
+    sh_call(rebin_cmd, f"Error while appllying best binning for {category} {args.channel}")
     best_binnings[args.channel][category] = cat_best
     with open(best_binnings_file, 'w') as f:
         f.write('{{\n\t"{}": {{\n'.format(args.channel))
