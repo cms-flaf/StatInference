@@ -106,7 +106,7 @@ for cat_index in range(first_cat_index, len(categories)):
 
     cat_log = os.path.join(cat_dir, 'results.json')
 
-    opt_cmd = f"python bin_opt/optimize_binning.py --input {input_card} --output {cat_dir} --workers-dir {workers_dir} --max-n-bins {args.max_n_bins} --poi {poi}"
+    opt_cmd = f"python bin_opt/optimize_binning.py --input {input_card} --output {cat_dir} --workers-dir {workers_dir} --max-n-bins {args.max-n-bins} --poi {poi}"
     if args.params is not None:
         opt_cmd += f" --params {args.params} "
     for cat_idx in range(cat_index):

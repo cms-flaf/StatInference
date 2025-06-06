@@ -7,7 +7,14 @@ import subprocess
 import sys
 import ROOT
 import numpy as np
+from FLAF.RunKit.run_tools import ps_call
+from FLAF.RunKit.envToJson import get_cmsenv
 
+cmssw_env = get_cmsenv(cmssw_path=os.getenv("FLAF_CMSSW_BASE")) #environment needs to be set up appropriately when GetLimits function is called to run law tasks such as UpperLimits or MergeResonantLimts
+for var in [ 'HOME', 'ANALYSIS_PATH', 'ANALYSIS_DATA_PATH', 'X509_USER_PROXY', 'CENTRAL_STORAGE',
+             'ANALYSIS_BIG_DATA_PATH', 'FLAF_CMSSW_BASE', 'FLAF_CMSSW_ARCH' ]:
+    if var in os.environ:
+        cmssw_env[var] = os.environ[var]
 
 def sh_call(cmd, error_message, verbose=0):
     if verbose > 0:
@@ -202,7 +209,9 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
               .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
  
-    output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
+    # output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
+    output = ps_call(law_cmd, shell=True, env=cmssw_env, verbose=verbose)
+
     print('this is sad')
     def check_combine_processes():
         result = subprocess.run("ps aux | grep combine | grep -v grep", shell=True, capture_output=True, text=True)
