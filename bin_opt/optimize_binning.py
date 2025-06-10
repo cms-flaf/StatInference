@@ -1,4 +1,4 @@
-import bayes_opt
+# import bayes_opt
 import json
 import math
 import numpy as np
@@ -11,7 +11,7 @@ import ROOT
 import shutil
 import threading
 import time
-from sortedcontainers import SortedSet
+# from sortedcontainers import SortedSet
 import distutils.util
 
 min_step = 0.001
@@ -39,6 +39,7 @@ def arrayToStr(a):
     return '[ ' + ', '.join([ str(x) for x in a ]) + ' ]'
 
 class Yields:
+    from sortedcontainers import SortedSet
     def __init__(self, ref_bkgs, n_bins):
         self.n_bins = n_bins
         self.ref_bkgs = ref_bkgs
@@ -543,7 +544,7 @@ if __name__ == '__main__':
     parser.add_argument('--input', required=True, type=str, help="input datacard")
     parser.add_argument('--output', required=True, type=str, help="output directory")
     parser.add_argument('--workers-dir', required=True, type=str, help="output directory for workers results")
-    parser.add_argument('--max-n-bins', required=True, type=int, help="maximum number of bins")
+    parser.add_argument('--max_n_bins', required=True, type=int, help="maximum number of bins")
     parser.add_argument('--poi', required=False, type=str, default='r', help="parameter of interest")
     parser.add_argument('--params', required=False, type=str, default=None,
                         help="algorithm parameters in format param1=value1,param2=value2 ...")

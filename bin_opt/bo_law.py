@@ -1,10 +1,12 @@
 import law
+import luigi
 import os
+import json
 
 
 from FLAF.RunKit.run_tools import ps_call #, natural_sort
 from FLAF.RunKit.crabLaw import cond as kInit_cond, update_kinit_thread
-from FLAF.run_tools.law_customizations import Task, HTCondorWorkflow, copy_param, get_param_value
+from FLAF.run_tools.law_customizations import HTCondorWorkflow, copy_param, get_param_value #, Task
 from FLAF.Common.Utilities import SerializeObjectToString
 from FLAF.RunKit.envToJson import get_cmsenv
 
@@ -14,24 +16,22 @@ for var in [ 'HOME', 'ANALYSIS_PATH', 'ANALYSIS_DATA_PATH', 'X509_USER_PROXY', '
     if var in os.environ:
         cmssw_env[var] = os.environ[var]
 
-class BinOptimizationTask(Task, HTCondorWorkflow, law.LocalWorkflow):
+class BinOptimizationTask(HTCondorWorkflow, law.LocalWorkflow): #(Task, HTCondorWorkflow, law.LocalWorkflow)
     max_runtime = copy_param(HTCondorWorkflow, 60.0)
     n_cpus = copy_param(HTCondorWorkflow, 4)
+
+    def __init__(self, *args, **kwargs):
+        super(BinOptimizationTask, self).__init__(*args, **kwargs)
 
     input_dir = luigi.Parameter()
     channel = luigi.Parameter()
     output_dir = luigi.Parameter()
     max_n_bins = luigi.IntParameter(default=20)
-    params = luigi.Parameter(default=None, significant=False)
+    params = luigi.Parameter(default="", significant=False)
     verbose = luigi.IntParameter(default=1)
-    categories = luigi.ListParameter(default="res2b:r,res1b:r,boosted:r,classVBF:r_qqhh,classGGF:r,classttH:r_qqhh,classTT:r_qqhh,classDY:r_qqhh")
+    categories = luigi.Parameter(default="res2b:r,res1b:r,boosted:r,classVBF:r_qqhh,classGGF:r,classttH:r_qqhh,classTT:r_qqhh,classDY:r_qqhh")
     binning_suggestions = luigi.ListParameter(default=[])
 
-    #def workflow_requires(self):
-    #    return
-    
-    #def requires(self):
-    #    return
 
     def create_branch_map(self):
         # Parse categories from string into a list of (category, poi) tuples
@@ -49,17 +49,28 @@ class BinOptimizationTask(Task, HTCondorWorkflow, law.LocalWorkflow):
         cat = self.branch_data["category"]
         poi = self.branch_data["poi"]
         os.makedirs(os.path.dirname(self.output().path), exist_ok=True)
-
         cmd = [
-            "python", "bin_opt/optimize_distributor.py",
+            "python3", "bin_opt/optimize_distributor.py",
             "--input", self.input_dir,
             "--channel", self.channel,
             "--output", os.path.join(self.output_dir, self.channel, cat),
             "--max-n-bins", str(self.max_n_bins),
-            "--params", SerializeObjectToString(self.params), #for extra algorithm parameters in the future
             "--categories", f"{cat}:{poi}",
             "--verbose", str(self.verbose)
         ]
+
+        if self.params:
+            if isinstance(self.params, dict):
+                params_str = ",".join(f"{k}={v}" for k, v in self.params.items())
+            elif isinstance(self.params, str):
+                params_str = str(self.params)
+            else:
+                raise ValueError("params argument should be a dict `{param1=value1,param2=value2}` or a string `param1=value1,param2=value2.")
+            cmd.extend( ["--params", params_str] )
+        
+        if self.binning_suggestions is not []:
+            cmd.append("--binning_suggestions")
+            cmd.extend(self.binning_suggestions)
 
         ps_call(" ".join(cmd), shell=True, env=cmssw_env, verbose=self.verbose)
 

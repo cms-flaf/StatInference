@@ -4,14 +4,14 @@ import json
 import argparse
 import subprocess
 import shutil
-from FLAF.RunKit.run_tools import ps_call
-from FLAF.RunKit.envToJson import get_cmsenv
+# from FLAF.RunKit.run_tools import ps_call
+# from FLAF.RunKit.envToJson import get_cmsenv
 
-cmssw_env = get_cmsenv(cmssw_path=os.getenv("FLAF_CMSSW_BASE")) #environment needs to be set up appropriately when GetLimits function is called to run law tasks such as UpperLimits or MergeResonantLimts
-for var in [ 'HOME', 'ANALYSIS_PATH', 'ANALYSIS_DATA_PATH', 'X509_USER_PROXY', 'CENTRAL_STORAGE',
-             'ANALYSIS_BIG_DATA_PATH', 'FLAF_CMSSW_BASE', 'FLAF_CMSSW_ARCH' ]:
-    if var in os.environ:
-        cmssw_env[var] = os.environ[var]
+# cmssw_env = get_cmsenv(cmssw_path=os.getenv("FLAF_CMSSW_BASE")) #environment needs to be set up appropriately when GetLimits function is called to run law tasks such as UpperLimits or MergeResonantLimts
+# for var in [ 'HOME', 'ANALYSIS_PATH', 'ANALYSIS_DATA_PATH', 'X509_USER_PROXY', 'CENTRAL_STORAGE',
+#              'ANALYSIS_BIG_DATA_PATH', 'FLAF_CMSSW_BASE', 'FLAF_CMSSW_ARCH' ]:
+#     if var in os.environ:
+#         cmssw_env[var] = os.environ[var]
 
 def compare_binnings(b1, b2):
     if b2 is None: return True
@@ -39,23 +39,36 @@ if __name__ == '__main__':
     if base_dir not in sys.path:
         sys.path.append(base_dir)
     __package__ = pkg_dir_name
+    
     #These lines above ensure that the script can import sibling or parent modules/packages, even when executed as a standalone script, by adjusting the Python path and package context dynamically. This is especially useful in complex project structures or when running scripts from the command line.
+    from FLAF.RunKit.run_tools import ps_call
+    from FLAF.RunKit.envToJson import get_cmsenv
+
+    cmssw_env = get_cmsenv(cmssw_path=os.getenv("FLAF_CMSSW_BASE")) #environment needs to be set up appropriately when GetLimits function is called to run law tasks such as UpperLimits or MergeResonantLimts
+    for var in [ 'HOME', 'ANALYSIS_PATH', 'ANALYSIS_DATA_PATH', 'X509_USER_PROXY', 'CENTRAL_STORAGE',
+             'ANALYSIS_BIG_DATA_PATH', 'FLAF_CMSSW_BASE', 'FLAF_CMSSW_ARCH', 'ANALYSIS_SOFT_PATH' ]:
+        if var in os.environ:
+            cmssw_env[var] = os.environ[var]
 
     parser = argparse.ArgumentParser(description='Optimize binning for a given channel in an era')
     parser.add_argument('--input', required=True, type=str, help="input directory to datacards and shape files")
-    parser.add_argument('--channel', required=True, type=str, help="channel_year, e.g. tauTau_2022")
+    parser.add_argument('--channel', required=True, type=str, help="channel_year, e.g. `tauTau_2022`, `ee`, `tauTau`, etc.")
     parser.add_argument('--output', required=True, type=str, help="output directory")
     parser.add_argument('--max-n-bins', required=False, type=int, default=20, help="maximum number of bins")
-    parser.add_argument('--params', required=False, type=str, default=None, help="algorithm parameters in the format: param1=value1,param2=valu2,...")
+    parser.add_argument('--params', required=False, type=str, default="", help="algorithm parameters in the format: {param1=value1,param2=valu2,...}")
     parser.add_argument('--verbose', required=False, type=int, default=1, help="verbosity level, 0: no output, 1: minimal output, 2: full output")
     parser.add_argument('--categories', required=False, type=str, default='res2b:r,res1b:r,boosted:r,classVBF:r_qqhh,classGGF:r,classttH:r_qqhh,classTT:r_qqhh,classDY:r_qqhh', help="comma separated list of categories and probability of improvement in the format --> category1:poi1,category2:poi2,...")
     parser.add_argument('--binning_suggestions', type=str, nargs='*', help="suggestions for binnings to try (e.g. best binnings from the previous round), json file")
-    
+    print("sadness")
     args = parser.parse_args()
 
     output_dir = os.path.join(args.output, args.channel)
     workers_dir = os.path.join(output_dir, 'workers')
     best_dir = os.path.join(output_dir, 'best')
+
+    print(f"Output directory: {output_dir}")
+    print(f"Workers directory: {workers_dir}")
+    print(f"Best directory: {best_dir}")
 
     categories = [[category, poi] for category, poi in (cat_entry.split(':') for cat_entry in args.categories.split(','))]
 
@@ -102,7 +115,8 @@ if __name__ == '__main__':
     for cat_index in range(first_category_idx, len(categories)):
         category, poi = categories[cat_index]
         print(f"Optimizing {args.channel} {category}")
-        input_card = f'{args.input}/hh_{category}_{args.channel}_*.txt'
+        # input_card = f'{args.input}/hh_{category}_{args.channel}_*.txt'
+        input_card = f'{args.input}/*.txt'
         cat_dir = os.path.join(output_dir, category)
         os.makedirs(cat_dir, exist_ok=True)
 
@@ -112,45 +126,57 @@ if __name__ == '__main__':
                 json.dump(suggested_binnings[category], f)
 
         category_log = os.path.join(cat_dir, 'results.json')
-
+        worker_cmd = [
+            "python3", "bin_opt/rebinAndRunLimitsWorker.py",
+            "--output", best_dir,
+            "--verbose", str(args.verbose)
+        ]
+        worker_process = subprocess.Popen(worker_cmd, env=cmssw_env)
         # opt_cmd = f"python bin_opt/optimize_binning.py --input {input_card} --output {cat_dir} --workers-dir {workers_dir} --max-n-bins {args.max-n-bins} --poi {poi}"
         opt_cmd = [
-            "python", "bin_opt/optimize_binning.py",
+            "python3", "bin_opt/optimize_binning.py",
             "--input", input_card, "--output", cat_dir,
             "--workers-dir", workers_dir, "--max-n-bins", str(args.max_n_bins),
             "--poi", poi
         ]
         # opt_cmd += f" --params {args.params} " if args.params is not None else ""
-        opt_cmd.append(f"--params={args.params}") if args.params is not None else None
+        opt_cmd.append(f"--params={args.params}") if args.params else "" #if args.params is not None else None
 
         for cat_idx in range (cat_index):
             cat = categories[cat_idx][0]
             other_cat_file = f"{best_dir}/hh_{cat}_{args.channel}_*.txt"
             if not os.path.isfile(other_cat_file):
-                raise RuntimeError(f"Datacard "{other_cat_file}" for category "{cat}" not found.")
+                raise RuntimeError(f"Datacard {other_cat_file} for category {cat} not found.")
             # opt_cmd += f' {other_cat_file} '
             opt_cmd.append(other_cat_file)
         
         # ps_call(opt_cmd, shell=True, env=cmssw_env, verbose=args.verbose)
-        opt_proess = subprocess.Popen(opt_cmd, env=cmssw_env)
+        opt_process = subprocess.Popen(opt_cmd, env=cmssw_env)
 
         cat_best = getBestBinning(category_log)
         if cat_best is None:
             raise RuntimeError(f"No best binning found for category {category} in {category_log}.")
         
+        
+        # rebin_cmd = [
+        #     "python3", "bin_opt/rebinAndRunLimitsWorker.py",
+        #     "--output", best_dir,
+        #     "--verbose", str(args.verbose)
+        # ]
+        # rebin_process = subprocess.Popen(rebin_cmd, env=cmssw_env)
+
         cat_best['poi'] = poi
         bin_edges = ', '.join([ str(edge) for edge in cat_best['bin_edges'] ])
 
-        # ps_call(f"python bin_opt/rebinAndRunLimits.py --input {input_card} --output {best_dir} --bin-edges '{bin_edges}' --rebin-only ", shell=True, env=cmssw_env, verbose=args.verbose)
+        ps_call(f"python bin_opt/rebinAndRunLimits.py --input {input_card} --output {best_dir} --bin-edges '{bin_edges}' --rebin-only ", shell=True, env=cmssw_env, verbose=args.verbose)
         rebin_cmd = [
-            "python", "bin_opt/rebinAndRunLimits.py",
+            "python3", "bin_opt/rebinAndRunLimits.py",
             "--input", input_card, "--output", best_dir,
             "--bin-edges", bin_edges, "--rebin-only"
         ]
-        rebin_process = subprocess.Popen(rebin_cmd, env=cmssw_env)
 
-        rebin_proc.wait()
-        opt_proc.wait()
+        # rebin_process.wait()
+        # opt_process.wait()
 
         best_binnings[args.channel][category] = cat_best
         with open(best_binnings_file, 'w') as f:
