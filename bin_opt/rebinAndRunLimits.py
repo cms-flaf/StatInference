@@ -112,7 +112,7 @@ def FixNegativeContributions(histogram):
     correction_factor = 1e-7
 
     original_integral = histogram.Integral()
-    if original_integral < 1e-6: #<= 0:
+    if original_integral <= 0:
         print(f'original integral is too small: {original_integral}')
         return False
 
@@ -174,7 +174,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         hist_new = ROOT.TH1F(hist_name, hist_orig.GetTitle(), bin_edges_v.size() - 1, bin_edges_v.data())
         RebinAndFill(hist_new, hist_orig)
         if FixNegativeContributions(hist_new):
-            # print(f'Fixed negative contributions in {hist_name}')
+            print(f'Fixed negative contributions in {hist_name}')
             output_root.WriteTObject(hist_new, hist_name, 'Overwrite')
         else:
             if is_central:
@@ -210,7 +210,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
               .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
  
     # output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
-    output = ps_call(law_cmd, shell=True, env=cmssw_env, verbose=verbose)
+    output = ps_call(law_cmd, shell=True, verbose=verbose, catch_stdout=True, split="\n")
 
     print('this is sad')
     def check_combine_processes():

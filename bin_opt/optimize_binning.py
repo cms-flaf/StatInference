@@ -1,4 +1,4 @@
-# import bayes_opt
+import bayes_opt
 import json
 import math
 import numpy as np
@@ -11,7 +11,7 @@ import ROOT
 import shutil
 import threading
 import time
-# from sortedcontainers import SortedSet
+from sortedcontainers import SortedSet
 import distutils.util
 
 min_step = 0.001

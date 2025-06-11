@@ -6,7 +6,6 @@ import re
 import shutil
 import subprocess
 import sys
-# import bayes_opt
 
 file_dir = os.path.dirname(os.path.abspath(__file__))
 pkg_dir = os.path.dirname(file_dir)
@@ -16,7 +15,7 @@ if base_dir not in sys.path:
     sys.path.append(base_dir)
 __package__ = pkg_dir_name
 
-#These lines above ensure that the script can import sibling or parent modules/packages, even when executed as a standalone script, by adjusting the Python path and package context dynamically. This is especially useful in complex project structures or when running scripts from the command line.
+#These lines above ensure that the script can import sibling or parent modules/packages, even when executed as a standalone script, by adjusting the Python path and package context dynamically. useful when running scripts from the command line.
 from FLAF.RunKit.run_tools import ps_call
 from FLAF.RunKit.envToJson import get_cmsenv
 
@@ -136,16 +135,16 @@ for cat_index in range(first_cat_index, len(categories)):
         if not os.path.isfile(other_cat_file):
             raise RuntimeError('Datacard "{}" for previous category not found.'.format(other_cat_file))
         opt_cmd += ' {} '.format(other_cat_file)
-    # sh_call(opt_cmd, "Error while running optimize_binning.py for {}".format(category), args.verbose)
-    ps_call(opt_cmd, shell=True, env=cmssw_env, verbose=args.verbose)
+    sh_call(opt_cmd, "Error while running optimize_binning.py for {}".format(category), args.verbose)
+    # ps_call(opt_cmd, shell=True, env=cmssw_env, verbose=args.verbose)
     cat_best = getBestBinning(cat_log)
     if cat_best is None:
         raise RuntimeError("Unable to find best binning for {}".format(category))
     cat_best['poi'] = poi
     bin_edges = ', '.join([ str(edge) for edge in cat_best['bin_edges'] ])
     rebin_cmd = f'python bin_opt/rebinAndRunLimits.py --input {input_card} --output {best_dir} --bin-edges "{bin_edges}" --rebin-only '
-    # sh_call(rebin_cmd, f"Error while appllying best binning for {category} {args.channel}")
-    ps_call(rebin_cmd, shell=True, env=cmssw_env, verbose=args.verbose)
+    sh_call(rebin_cmd, f"Error while appllying best binning for {category} {args.channel}")
+    # ps_call(rebin_cmd, shell=True, env=cmssw_env, verbose=args.verbose)
     best_binnings[args.channel][category] = cat_best
     with open(best_binnings_file, 'w') as f:
         f.write('{{\n\t"{}": {{\n'.format(args.channel))
