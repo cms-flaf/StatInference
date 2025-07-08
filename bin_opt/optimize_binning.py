@@ -570,7 +570,7 @@ if __name__ == '__main__':
             param_dict[p[0]] = p[1]
 
     ref_bkgs = {
-        'DY': re.compile(r'^DY.*$'),
+        'DY': re.compile('^DY$'),
         'TT': re.compile('^TT$'),
     }
 
