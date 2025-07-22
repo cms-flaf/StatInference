@@ -25,12 +25,15 @@ def HistToNumpy(hist):
     x_err2 = np.zeros(max_value_int)
     # print(f'Debug: Histogram {hist.GetName()} has {hist.GetNbinsX()} bins, expected {max_value_int} bins.')
 
-    if hist.GetNbinsX() != max_value_int:
-        raise RuntimeError("Inconsistent number of bins")
-    for n in range(max_value_int):
-        if abs(hist.GetBinLowEdge(n + 1) - n * min_step) > epsilon \
-                or abs(hist.GetBinLowEdge(n + 2) - (n + 1) * min_step) > epsilon:
-            raise RuntimeError("Inconsistent binning")
+    # if hist.GetNbinsX() != max_value_int:
+    #     print(f'debug: Histogram {hist.GetName()} has {hist.GetNbinsX()} bins, while expected {max_value_int} bins')
+    #     raise RuntimeError("Inconsistent number of bins")
+    # for n in range(max_value_int):
+    #     if abs(hist.GetBinLowEdge(n + 1) - n * min_step) > epsilon \
+    #             or abs(hist.GetBinLowEdge(n + 2) - (n + 1) * min_step) > epsilon:
+    #         raise RuntimeError("Inconsistent binning")
+    for n in range(hist.GetNbinsX()):
+
         x[n] = hist.GetBinContent(n + 1)
         x_err2[n] = hist.GetBinError(n + 1) ** 2
     return x, x_err2

@@ -16,6 +16,10 @@ for var in [ 'HOME', 'ANALYSIS_PATH', 'ANALYSIS_DATA_PATH', 'X509_USER_PROXY', '
     if var in os.environ:
         cmssw_env[var] = os.environ[var]
 
+clean_env = {k: os.environ[k] for k in [
+    'HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'ANALYSIS_SOFT_PATH', 'FLAF_CMSSW_BASE'
+] if k in os.environ}
+
 def sh_call(cmd, error_message, verbose=0):
     if verbose > 0:
         print('>> {}'.format(cmd))
@@ -210,7 +214,11 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
               .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
  
     # output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
-    output = ps_call(law_cmd, shell=True, verbose=verbose, catch_stdout=True, split="\n")
+    output = ps_call(
+        "bash -c 'source ../inference/setup.sh && " + law_cmd +
+        " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
+        shell=True, env=clean_env, verbose=verbose, catch_stdout=True, split="\n"
+        )
 
     print('this is sad')
     def check_combine_processes():
@@ -220,7 +228,12 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
 
     if verbose > 0:
         print("Removing outputs...")
-    sh_call(law_cmd + ' --remove-output 2,a ', "Error while removing combine outputs", verbose)
+    # sh_call(law_cmd + ' --remove-output 2,a ', "Error while removing combine outputs", verbose)
+    ps_call(
+        "bash -c 'source ../inference/setup.sh && " + law_cmd + " --remove-output 2,a " +
+        " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
+        shell=True, env=clean_env, verbose=verbose, catch_stdout=True, split="\n"
+    )
     limit_regex = re.compile('^Expected 50.0%: {} < ([0-9\.]+)'.format(poi))
     for line in reversed(output):
         lim = limit_regex.match(line)

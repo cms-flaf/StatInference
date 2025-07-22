@@ -135,16 +135,16 @@ for cat_index in range(first_cat_index, len(categories)):
         if not os.path.isfile(other_cat_file):
             raise RuntimeError('Datacard "{}" for previous category not found.'.format(other_cat_file))
         opt_cmd += ' {} '.format(other_cat_file)
-    sh_call(opt_cmd, "Error while running optimize_binning.py for {}".format(category), args.verbose)
-    # ps_call(opt_cmd, shell=True, env=cmssw_env, verbose=args.verbose)
+    # sh_call(opt_cmd, "Error while running optimize_binning.py for {}".format(category), args.verbose)
+    ps_call(opt_cmd, shell=True, env=None, verbose=args.verbose)
     cat_best = getBestBinning(cat_log)
     if cat_best is None:
         raise RuntimeError("Unable to find best binning for {}".format(category))
     cat_best['poi'] = poi
     bin_edges = ', '.join([ str(edge) for edge in cat_best['bin_edges'] ])
     rebin_cmd = f'python bin_opt/rebinAndRunLimits.py --input {input_card} --output {best_dir} --bin-edges "{bin_edges}" --rebin-only '
-    sh_call(rebin_cmd, f"Error while appllying best binning for {category} {args.channel}")
-    # ps_call(rebin_cmd, shell=True, env=cmssw_env, verbose=args.verbose)
+    # sh_call(rebin_cmd, f"Error while appllying best binning for {category} {args.channel}")
+    ps_call(rebin_cmd, shell=True, env=None, verbose=args.verbose)
     best_binnings[args.channel][category] = cat_best
     with open(best_binnings_file, 'w') as f:
         f.write('{{\n\t"{}": {{\n'.format(args.channel))
