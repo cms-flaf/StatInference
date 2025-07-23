@@ -216,8 +216,9 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     # output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
     output = ps_call(
         "bash -c 'source ../inference/setup.sh && " + law_cmd +
-        " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
-        shell=True, env=clean_env, verbose=verbose, catch_stdout=True, split="\n"
+        " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate " +
+        "'",
+        shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n"
         )
 
     print('this is sad')
@@ -228,12 +229,14 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
 
     if verbose > 0:
         print("Removing outputs...")
-    # sh_call(law_cmd + ' --remove-output 2,a ', "Error while removing combine outputs", verbose)
-    ps_call(
-        "bash -c 'source ../inference/setup.sh && " + law_cmd + " --remove-output 2,a " +
-        " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
-        shell=True, env=clean_env, verbose=verbose, catch_stdout=True, split="\n"
-    )
+    # sh_call(law_cmd + ' --remove-output 2,a,y ', "Error while removing combine outputs", verbose)
+    # ps_call(
+    #     "bash -c ' " +
+    #     law_cmd + " --remove-output 2,a " +
+    #     " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
+    #     shell=True, env=clean_env, verbose=verbose, catch_stdout=True, split="\n"
+    # )
+    ps_call(law_cmd + " --remove-output 2,a,y ", shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n")
     limit_regex = re.compile('^Expected 50.0%: {} < ([0-9\.]+)'.format(poi))
     for line in reversed(output):
         lim = limit_regex.match(line)
