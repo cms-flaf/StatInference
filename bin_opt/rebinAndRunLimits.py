@@ -178,7 +178,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         hist_new = ROOT.TH1F(hist_name, hist_orig.GetTitle(), bin_edges_v.size() - 1, bin_edges_v.data())
         RebinAndFill(hist_new, hist_orig)
         if FixNegativeContributions(hist_new):
-            print(f'Fixed negative contributions in {hist_name}')
+            # print(f'Fixed negative contributions in {hist_name}')
             output_root.WriteTObject(hist_new, hist_name, 'Overwrite')
         else:
             if is_central:
