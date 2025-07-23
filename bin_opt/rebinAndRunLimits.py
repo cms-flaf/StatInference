@@ -222,6 +222,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         )
 
     print('this is sad')
+    # print("ps_call output:", output)
     def check_combine_processes():
         result = subprocess.run("ps aux | grep combine | grep -v grep", shell=True, capture_output=True, text=True)
         print(result.stdout)
@@ -229,16 +230,19 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
 
     if verbose > 0:
         print("Removing outputs...")
-    # sh_call(law_cmd + ' --remove-output 2,a,y ', "Error while removing combine outputs", verbose)
-    # ps_call(
-    #     "bash -c ' " +
-    #     law_cmd + " --remove-output 2,a " +
-    #     " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
-    #     shell=True, env=clean_env, verbose=verbose, catch_stdout=True, split="\n"
-    # )
-    ps_call(law_cmd + " --remove-output 2,a,y ", shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n")
+    # sh_call(law_cmd + ' --remove-output 2,a,y ', "Error while removing combine outputs", verbose=2)
+    ps_call(
+        "bash -c ' source ../inference/setup.sh && " +
+        law_cmd + " --remove-output 2,a,y " +
+        " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
+        shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n"
+    )
+    # ps_call(law_cmd + " --remove-output 2,a,y ", shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n")
+    returned_code, output_lines, _ = output
     limit_regex = re.compile('^Expected 50.0%: {} < ([0-9\.]+)'.format(poi))
-    for line in reversed(output):
+    for line in reversed(output_lines):
+        if not isinstance(line, str) or line is None:
+            continue
         lim = limit_regex.match(line)
         if lim is not None:
             return float(lim.group(1))
