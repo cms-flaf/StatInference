@@ -11,8 +11,17 @@ class Model:
     return applyParameters(self.input_file_pattern, file_param_values)
 
   def paramStr(self, param_values=None):
-    param_strs = [ f"{param}_{param_values[param]}" for param in self.parameters ]
+    # for nonresonant params: Ensure Model.paramStr(params) ignores 'mass'
+    if param_values is None: return "nominal"
+    clean = {k:v for k,v in param_values.items() if k != "mass"}
+    if not clean: return "nominal"
+    # for nonresonant params, e.g. kl1p0_kt1p0
+    param_strs = [ f"{param}_{clean[param]}" for param in clean.keys() ]
     return '_'.join(param_strs)
+
+  def massStr(self, param_values):
+    # for mass: only called if 'mass' in params
+    return str(int(param_values['mass']))   # standard CH mass axis
 
   @staticmethod
   def fromConfig(entry):
