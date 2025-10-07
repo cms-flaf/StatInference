@@ -110,14 +110,15 @@ def RebinAndFill(new_hist, old_hist):
                 bin_new = new_hist.GetBin(x_bin_new, y_bin_new)
                 add_bin_content(bin_old, bin_new)
     
-    check_hist_for_nan_inf_neg(new_hist, 'new_hist', new_hist.GetName())
+    # check_hist_for_nan_inf_neg(new_hist, 'new_hist', new_hist.GetName())
 
 def FixNegativeContributions(histogram):
     correction_factor = 1e-7
 
     original_integral = histogram.Integral()
+    # print(f'original integral: {original_integral}')
     if original_integral <= 0:
-        print(f'original integral is too small: {original_integral}')
+        # print(f'original integral is too small: {original_integral}')
         return False
 
     has_fixed_bins = False
@@ -174,8 +175,13 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
             process_name = hist_name
             is_central = True
         if process_name in processes_to_remove: continue
+        if hist_name in ['cat_22preEE_tautau_res2b', 'cat_22preEE_tautau_res1b', 'cat_22preEE_tautau_boosted',
+                         'cat_22preEE_mutau_res2b', 'cat_22preEE_mutau_res1b', 'cat_22preEE_mutau_boosted',  
+                         'cat_22preEE_etau_res2b', 'cat_22preEE_etau_res1b', 'cat_22preEE_etau_boosted']: 
+            continue #fix this later on renamed processes shape files
         hist_orig = input_root.Get(hist_name)
         hist_new = ROOT.TH1F(hist_name, hist_orig.GetTitle(), bin_edges_v.size() - 1, bin_edges_v.data())
+        # print(f'hist_name {hist_name} hist_orig {hist_orig} hist_new {hist_new}')
         RebinAndFill(hist_new, hist_orig)
         if FixNegativeContributions(hist_new):
             # print(f'Fixed negative contributions in {hist_name}')
@@ -189,19 +195,27 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     input_root.Close()
     output_root.Close()
     print('input and output files closed')
+    # print(f'processes_to_remove: {processes_to_remove}')
     if len(processes_to_remove):
         proc_str = " ".join(processes_to_remove)
         if verbose > 0:
             print("Removing processes: {}".format(proc_str))
-        sh_call('remove_processes.py {} {}'.format(output_datacard, proc_str),
-                'Error while running remove_processes.py', verbose)
+        # sh_call('remove_processes.py {} {}'.format(output_datacard, proc_str),
+        #         'Error while running remove_processes.py', verbose)
+        try: #this is not working for some reason. Fixing the path to where this script is in inference/dhi/scripts or import dhi in cwd doesn't work. something to fix. running remove_processes in local terminal works just fine. trying this in a standalone script now (inference/dhi/scripts/remove_processes.sh)
+            ps_call(f'python3 remove_processes.py {output_datacard} {proc_str} -d {output_dir}', 
+                    shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n")
+        except Exception as e:
+            print(f"Warning: Failed to remove processes {proc_str}: {e}")
+            print("Continuing without removing processes...")
 
     if len(nuissances_to_remove):
         nuis_str = " ".join(nuissances_to_remove)
         if verbose > 0:
             print("Removing nuissances: {}".format(nuis_str))
-        sh_call('remove_parameters.py {} {}'.format(output_datacard, nuis_str),
-                'Error while running remove_parameters.py', verbose)
+        # sh_call('remove_parameters.py {} {}'.format(output_datacard, nuis_str),
+        #         'Error while running remove_parameters.py', verbose)
+        ps_call(f'python3 remove_parameters.py {output_datacard} {nuis_str}', shell=True, env=clean_env, verbose=verbose)
     if rebin_only:
         return
     if verbose > 0:
@@ -209,10 +223,40 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     version = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     datacards_str = output_datacard
     if len(other_datacards):
-        datacards_str += ',' + ','.join(other_datacards)
+        # datacards_str += ',' + ','.join(copied_datacards)
+        # when running the UpperLimits using combine (e.g. for tauTau channel, res1b category), the code looks for res2b input shape file in the same worker directory instead of the res2b best directory. but if the res2b optimization was done at a different time, the current worker directory will not have a copy of it
+        copied_other_datacards = []
+        for other_datacard in other_datacards:
+            other_basename = os.path.basename(other_datacard)
+            other_shapes = os.path.splitext(other_datacard)[0] + '.input.root'
+            
+            current_worker_dir_datacard = os.path.join(output_dir, other_basename)
+            current_worker_dir_shapes = os.path.join(output_dir, os.path.basename(other_shapes))
+            
+            if os.path.exists(other_datacard):
+                shutil.copy(other_datacard, current_worker_dir_datacard)
+                copied_other_datacards.append(current_worker_dir_datacard)
+                if verbose > 0:
+                    print(f"Copied other datacard {other_datacard} to {current_worker_dir_datacard}")
+            else:
+                print(f"Warning: Other datacard not found: {other_datacard}")
+                continue
+                
+            if os.path.exists(other_shapes):
+                shutil.copy(other_shapes, current_worker_dir_shapes)
+                if verbose > 0:
+                    print(f"Copied other shapes {other_shapes} to {current_worker_dir_shapes}")
+            else:
+                print(f"Warning: Other shapes file not found: {other_shapes}")
+
+        if copied_other_datacards:
+            datacards_str += ',' + ','.join(copied_other_datacards)
+    # law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
+    #           .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
     law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
-              .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
- 
+              .format(version, 'hh_model_NNLOFix_13p6.model_default', datacards_str, poi, 'kl,1,1,1')
+
+
     # output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
     output = ps_call(
         "bash -c 'source ../inference/setup.sh && " + law_cmd +
@@ -221,7 +265,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n"
         )
 
-    print('this is sad')
+    # print('this is sad')
     # print("ps_call output:", output)
     def check_combine_processes():
         result = subprocess.run("ps aux | grep combine | grep -v grep", shell=True, capture_output=True, text=True)
@@ -244,6 +288,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         if not isinstance(line, str) or line is None:
             continue
         lim = limit_regex.match(line)
+        print(f'debug lim {lim}')
         if lim is not None:
             return float(lim.group(1))
 

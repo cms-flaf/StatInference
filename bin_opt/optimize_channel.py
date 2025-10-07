@@ -114,7 +114,7 @@ while first_cat_index < len(categories) and categories[first_cat_index][0] in be
 for cat_index in range(first_cat_index, len(categories)):
     category, poi = categories[cat_index]
     print("Optimising {} {}...".format(args.channel, category))
-    input_card = f'{args.input}/hh_{category}_{args.channel}_13TeV.txt' # or more generally, f'{args.input}/*.txt'
+    input_card = f'{args.input}/hh_{category}_{args.channel}_13p6TeV.txt' # or more generally, f'{args.input}/*.txt'
     cat_dir = os.path.join(output_dir, category)
     if not os.path.isdir(cat_dir):
         os.mkdir(cat_dir)
@@ -131,7 +131,7 @@ for cat_index in range(first_cat_index, len(categories)):
         opt_cmd += f" --params {args.params} "
     for cat_idx in range(cat_index):
         cat = categories[cat_idx][0]
-        other_cat_file = '{}/hh_{}_{}_13TeV.txt'.format(best_dir, cat, args.channel)
+        other_cat_file = '{}/hh_{}_{}_13p6TeV.txt'.format(best_dir, cat, args.channel)
         if not os.path.isfile(other_cat_file):
             raise RuntimeError('Datacard "{}" for previous category not found.'.format(other_cat_file))
         opt_cmd += ' {} '.format(other_cat_file)

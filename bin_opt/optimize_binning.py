@@ -14,9 +14,14 @@ import time
 from sortedcontainers import SortedSet
 import distutils.util
 
-min_step = 0.001
-min_step_digits = -int(math.log10(min_step))
-step_int_scale = 10 ** min_step_digits
+# min_step = 0.001 #for 1000 bins
+# min_step_digits = -int(math.log10(min_step))
+# step_int_scale = 10 ** min_step_digits
+# max_value_int = step_int_scale
+
+min_step = 0.0002
+min_step_digits = -(math.log10(min_step)) #3.6989700043360187
+step_int_scale = round(10 ** min_step_digits) #5000
 max_value_int = step_int_scale
 
 def HistToNumpy(hist):
@@ -142,6 +147,7 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
 
     input_root = ROOT.TFile.Open(input_shapes)
     print(f'Extracting yields from {input_shapes}')
+    # hist_names = [ str(key.GetName()) for key in input_root.Get("cat_22preEE_tautau_res2b").GetListOfKeys() ] #fix this hard coding later
     hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() ]
     nuis_name_regex = re.compile('(.*)_(CMS_.*(Up|Down))')
     for hist_name in sorted(hist_names):
@@ -156,8 +162,11 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
             unc_variation = ''
         if ignore_variations_regex.match(unc_variation):
             continue
-
+        if hist_name in ['cat_22preEE_tautau_res2b', 'cat_22preEE_tautau_res1b', 'cat_22preEE_tautau_boosted',
+                         'cat_22preEE_mutau_res2b', 'cat_22preEE_mutau_res1b', 'cat_22preEE_mutau_boosted',  
+                         'cat_22preEE_etau_res2b', 'cat_22preEE_etau_res1b', 'cat_22preEE_etau_boosted']: continue #fix this later
         hist = input_root.Get(hist_name)
+        print(f'hist {hist} hist_name {hist_name} process {process}')
         hist_yield, hist_err2 = HistToNumpy(hist)
         yields.addProcess(process, hist_yield, hist_err2, unc_variation)
     input_root.Close()
@@ -434,7 +443,7 @@ class BayesianOptimization:
         utility_index = 0
         open_request_sleep = 1
         while n < n_eq_steps:
-            print(f'PointGenerator: n {n}, n_eq_steps {n_eq_steps}')
+            # print(f'PointGenerator: n {n}, n_eq_steps {n_eq_steps}')
             point = self.suggest(utility_index)
 
             rel_thrs = np.zeros(len(point))
@@ -467,24 +476,24 @@ class BayesianOptimization:
                 if n == n_eq_steps - 1:
                     self.print('Waiting for open requests to finish...')
                     self.waitOpenRequestsToFinish()
-        print('PointGenerator')
+        # print('PointGenerator')
         self.input_queue.put(None)
 
     def JobDispatcher(self):
         while True:
-            print('JobDispatcher')
+            # print('JobDispatcher')
             time.sleep(1)
-            print(f'self.workers_dir {self.workers_dir}')
+            # print(f'self.workers_dir {self.workers_dir}')
             for worker_dir in os.listdir(self.workers_dir):
                 worker_dir = os.path.join(self.workers_dir, worker_dir)
                 # print(f'os.path.isdir(worker_dir) {os.path.isdir(worker_dir)} {worker_dir}')
                 if not os.path.isdir(worker_dir): continue
                 task_file = os.path.join(worker_dir, 'task.txt')
                 task_file_tmp = os.path.join(worker_dir, '.task.txt')
-                print(f'os.path.isfile(task_file) {os.path.isfile(task_file)}')
+                # print(f'os.path.isfile(task_file) {os.path.isfile(task_file)}')
                 if os.path.isfile(task_file):
                     result_file = os.path.join(worker_dir, 'result.txt')
-                    print(f'os.path.isfile(result_file) {os.path.isfile(result_file)}')
+                    # print(f'os.path.isfile(result_file) {os.path.isfile(result_file)}')
                     if os.path.isfile(result_file):
                         with open(result_file, 'r') as f:
                             result = json.load(f)
@@ -502,7 +511,7 @@ class BayesianOptimization:
                         os.remove(result_file)
                 else:
                     try:
-                        print('task.txt doesnt exist')
+                        # print('task.txt doesnt exist')
                         binning = self.input_queue.get(True, 1)
                         if binning is None: return
                         task = {
@@ -599,9 +608,9 @@ if __name__ == '__main__':
                               bkg_yields=bkg_yields,
                               input_queue_size=2, random_seed=None,
                               other_datacards=other_datacards)
-    print("here")
+    # print("here")
     bo.maximize(20)
-    print("here here")
+    # print("here here")
 
     print('Minimization finished.')
     print('Best binning: {}'.format(arrayToStr(bo.best_binning.edges)))
