@@ -1,7 +1,6 @@
 import itertools
 import math
 import os
-import re
 import yaml
 
 from CombineHarvester.CombineTools.ch import CombineHarvester
@@ -12,6 +11,7 @@ from .uncertainty import Uncertainty, UncertaintyType, UncertaintyScale, MultiVa
 from .model import Model
 from .binner import Binner
 ROOT = importROOT()
+
 
 class DatacardMaker:
   def __init__(self, cfg_file, input_path, hist_bins=None, param_values=None):
@@ -26,6 +26,7 @@ class DatacardMaker:
     self.channels = cfg["channels"]
     self.categories = cfg["categories"]
     self.signalFractionForRelevantBins = cfg['signalFractionForRelevantBins']
+
 
     self.bins = []
     for era, channel, cat in self.ECC():
@@ -45,7 +46,6 @@ class DatacardMaker:
         if param_values is not None:
           print(f"Overwriting signal parameters to {param_values}")
           process['param_values'] = param_values
-      
       new_processes = Process.fromConfig(process, self.model)
       for process in new_processes:
         if process.name in self.processes:
@@ -59,7 +59,6 @@ class DatacardMaker:
         if process.is_signal:
           has_signal = True
           self.param_bins.setdefault(self.model.paramStr(process.params), process.params)
-
     if data_process is None:
       raise RuntimeError("No data process defined")
     if not has_signal:
@@ -78,8 +77,10 @@ class DatacardMaker:
 
     self.autoMCStats = cfg.get("autoMCStats", { 'apply': False })
 
+    
     hist_bins = hist_bins or cfg.get("hist_bins", None)
     self.hist_binner = Binner(hist_bins)
+    # print(f"Using hist_bins: {self.hist_binner.hist_bins}")
 
     self.input_files = {}
     self.shapes = {}
@@ -111,18 +112,17 @@ class DatacardMaker:
     return itertools.product(self.processes.keys(), param_bins, self.eras, self.channels, self.categories)
 
   def getInputFile(self, era, model_params):
-    file_name = self.model.getInputFileName(era, model_params)
-    
+    file_name = self.model.getInputFileName(era, model_params)    
     if file_name not in self.input_files:
       full_file_name = os.path.join(self.input_path, file_name)
       file = ROOT.TFile.Open(full_file_name, "READ")
-      if file is None:
+      if file == None:
         raise RuntimeError(f"Cannot open file {full_file_name}")
       self.input_files[file_name] = file
     return file_name, self.input_files[file_name]
 
 
-  def getMultiValueLnUnc(self,unc,unc_name, process, era, channel, category, model_params):
+  def getMultiValueLnUnc(self,unc,unc_name, process, era, channel, category, model_params):#, unc_name=None, unc_scale=None)
     file_name, file = self.getInputFile(era, model_params)
     hist_name = f"{channel}/{category}/{process.hist_name}"
     if unc.getUncertaintyForProcess(process.name) != None:
@@ -134,6 +134,7 @@ class DatacardMaker:
       for subp in process.subprocesses:
         hist_name = f"{channel}/{category}/{subp}"
         subhist = file.Get(hist_name)
+        #newhist = self.hist_binner.applyBinning(era, channel, category, model_params, subhist)
         if subhist == None:
           raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
         axis = subhist.GetXaxis()
@@ -173,7 +174,7 @@ class DatacardMaker:
         if hist is None:
           raise RuntimeError("Cannot create asimov data histogram")
       else:
-        hist_name = f"{channel}/{category}/{process.hist_name}"        
+        hist_name = f"{channel}/{category}/{process.hist_name}"
         hists = []
         if process.subprocesses:
           for subp in process.subprocesses:
@@ -181,14 +182,14 @@ class DatacardMaker:
             if unc_name and unc_scale:
               hist_name += f"_{unc_name}{unc_scale}"
             subhist = file.Get(hist_name)
-            if subhist is None:
+            if subhist == None:
               raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
             hists.append(self.hist_binner.applyBinning(era, channel, category, model_params, subhist))
         else:
           if unc_name and unc_scale:
             hist_name += f"_{unc_name}{unc_scale}"
           hist = file.Get(hist_name)
-          if hist is None:
+          if hist == None:
             raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
           hists.append(self.hist_binner.applyBinning(era, channel, category, model_params, hist))
         if len(hists) == 0:
@@ -290,7 +291,7 @@ class DatacardMaker:
       if process.is_data: continue
       model_params = self.param_bins.get(param_str, None)
       if isMVLnUnc:
-        unc_value = self.getMultiValueLnUnc(unc,unc_name,process, era, channel, category, model_params)
+        unc_value = self.getMultiValueLnUnc(unc,unc_name,process, era, channel, category, model_params)#, unc_name=None, unc_scale=None
 
       uncApplies = unc_value != None if isMVLnUnc else unc.appliesTo(process, era, channel, category)
       if not uncApplies: continue
@@ -302,9 +303,12 @@ class DatacardMaker:
       if unc.needShapes:
         model_params = self.param_bins.get(param_str, None)
         nominal_shape = self.getShape(self.processes[proc], era, channel, category, model_params)
+        
+        
         for unc_scale in [ UncertaintyScale.Up, UncertaintyScale.Down ]:
           shapes[unc_scale] = self.getShape(self.processes[proc], era, channel, category, model_params,
                                             unc_name, unc_scale.name)
+     
       unc_to_apply = unc.resolveType(nominal_shape, shapes, self.autolnNThr, self.asymlnNThr)
       can_ignore = unc_to_apply.canIgnore(unc_value, self.ignorelnNThr) if isMVLnUnc else unc_to_apply.canIgnore(self.ignorelnNThr)
       if can_ignore:
@@ -400,7 +404,7 @@ class DatacardMaker:
           self.cb.cp().era([subera]).channel([subchannel]).mass(param_list).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
 
       self.cb.cp().mass(param_list).process(processes).WriteDatacard(dc_file, shape_file)
-      
+   
 
 
   def createDatacards(self, output, verbose=1):
