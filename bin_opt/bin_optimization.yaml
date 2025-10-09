@@ -1,0 +1,17 @@
+input:
+  directory: path-to-your-datacard-and-shape-file
+  channels: ["tauTau", "muTau", "eTau"]
+  categories: ["res2b", "res1b", "boosted"]
+
+output:
+  directory: binning_run3
+
+signal:
+  #add condition in the code that if the following keys are absent, pass an empty list
+  ggF: #["ggHH_kl_1_kt_1_hbbhtt", "ggHH_kl_2p45_kt_1_hbbhtt", "ggHH_kl_5_kt_1_hbbhtt"]
+  VBF: #['qqHH_CV_1_C2V_1_kl_1_hbbhtt', 'qqHH_CV_1_C2V_0_kl_1_hbbhtt', 'qqHH_CV_1p74_C2V_1p37_kl_14p4_hbbhtt', 'qqHH_CV_m0p758_C2V_1p44_kl_m19p3_hbbhtt', 'qqHH_CV_m0p962_C2V_0p959_kl_m1p43_hbbhtt', 'qqHH_CV_m1p6_C2V_2p72_kl_m1p36_hbbhtt']
+
+combine:
+  method: AsymptoticLimits #MergeResonantLimits
+  hh_model: #dhi.models.hh_model_NNLOFix_13p6:model_default #dhi.models.hh_model:model_default
+
