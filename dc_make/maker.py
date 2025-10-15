@@ -58,10 +58,10 @@ class DatacardMaker:
         self.processes[process.name] = process
         if process.channels:
           for channel in process.channels:
-              if channel not in self.channel_processes:
-                print(f"Channel {channel} not defined in config")
-                continue
-              self.channel_processes[channel].append(process.name)
+            if channel not in self.channel_processes:
+              print(f"Channel {channel} not defined in config")
+              continue
+            self.channel_processes[channel].append(process.name)
         else:
           for channel in self.channels:
             self.channel_processes[channel].append(process.name)
@@ -253,7 +253,7 @@ class DatacardMaker:
     def add(model_params, param_str, process_name):
       if process.is_data:
         self.cb.AddObservations([param_str], [self.analysis], [era], [channel], [(bin_idx, bin_name)])
-      else: 
+      else:
         self.cb.AddProcesses([param_str], [self.analysis], [era], [channel], [process_name], [(bin_idx, bin_name)], process.is_signal)
 
       shape = self.getShape(process, era, channel, category, model_params)
@@ -325,7 +325,7 @@ class DatacardMaker:
         for unc_scale in [ UncertaintyScale.Up, UncertaintyScale.Down ]:
           shapes[unc_scale] = self.getShape(self.processes[proc], era, channel, category, model_params,
                                             unc_name, unc_scale.name)
-     
+
       unc_to_apply = unc.resolveType(nominal_shape, shapes, self.autolnNThr, self.asymlnNThr)
       can_ignore = unc_to_apply.canIgnore(unc_value, self.ignorelnNThr) if isMVLnUnc else unc_to_apply.canIgnore(self.ignorelnNThr)
       if can_ignore:
