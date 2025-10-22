@@ -14,15 +14,22 @@ import time
 from sortedcontainers import SortedSet
 import distutils.util
 
-# min_step = 0.001 #for 1000 bins
-# min_step_digits = -int(math.log10(min_step))
-# step_int_scale = 10 ** min_step_digits
-# max_value_int = step_int_scale
+import yaml
+input_binning_opt_config = os.path.join(os.environ["ANALYSIS_PATH"], "StatInference", "bin_opt", "bin_optimization.yaml")
+with open(input_binning_opt_config, "r") as f:
+    input_binning_opt_config_dict = yaml.safe_load(f)
 
-min_step = 0.0002
-min_step_digits = -(math.log10(min_step)) #3.6989700043360187
-step_int_scale = round(10 ** min_step_digits) #5000
-max_value_int = step_int_scale
+if input_binning_opt_config_dict["input"]["num_original_bins"] == 1000:
+    min_step = 0.001 #for 1000 bins
+    min_step_digits = -int(math.log10(min_step))
+    step_int_scale = 10 ** min_step_digits
+    max_value_int = step_int_scale
+
+if input_binning_opt_config_dict["input"]["num_original_bins"] == 5000:
+    min_step = 0.0002
+    min_step_digits = -(math.log10(min_step)) #3.6989700043360187
+    step_int_scale = round(10 ** min_step_digits) #5000
+    max_value_int = step_int_scale
 
 def HistToNumpy(hist):
     epsilon = 1e-7
@@ -48,9 +55,7 @@ class Yields:
         self.ref_bkgs = ref_bkgs
         self.yields = {}
         self.processes = SortedSet([ 'total' ] + list(ref_bkgs.keys()))
-        # print(f'debug: self.processes: {self.processes}')
         self.input_processes = SortedSet()
-        # print(f'debug: self.input_processes: {self.input_processes}')
         self.unc_variations = SortedSet([''])
         self.ref_bkg_thr = 1e-7
         self.total_bkg_thr = 0.03 #0.18
@@ -63,41 +68,27 @@ class Yields:
     def addProcess(self, process, yields, err2, unc_variation):
         names = [ 'total' ]
         for ref_bkg_name, ref_bkg_regex in self.ref_bkgs.items():
-            # print(f'Debug: ref_bkg_name: {ref_bkg_name}, ref_bkg_regex: {ref_bkg_regex}, process: {process}')
             if ref_bkg_regex.match(process) is not None:
                 names.append(ref_bkg_name)
         if process not in self.input_processes:
             self.input_processes.add(process)
-            # print(f'debug: Added process {process} to input_processes: {self.input_processes}')
         for name in names:
             if unc_variation not in self.unc_variations:
                 self.unc_variations.add(unc_variation)
             key = (name, unc_variation)
-            # print(f'key: {key}')
-            # print(f'self.yields {self.yields}')
             if key not in self.yields:
-                # print(f'self.n_bins {self.n_bins} np.zeros(self.n_bins) {np.zeros(self.n_bins)}')
                 self.yields[key] = [ np.zeros(self.n_bins), np.zeros(self.n_bins) ]
             self.yields[key][0] += yields
             self.yields[key][1] += err2
 
     def test(self, start, stop, yield_thr):
         total_yield = {}
-        # print(f'Debug: self.processes {self.processes}')
         for process in self.processes:
-            # print(f'Debug: process {process}')
             is_ref = process != 'total'
-            # print(f'Debug: self.unc_variations {self.unc_variations}')
             for unc_variation in self.unc_variations:
-                # print(f'Debug: unc_variation {unc_variation}')
                 is_central = unc_variation == ''
-                # print(f'Debug: is_central {is_central}, self.consider_non_central {self.consider_non_central}')
                 if not is_central and not self.consider_non_central: continue
                 key = (process, unc_variation)
-                # print(f'Debug: key {key}')
-                # print(f'Debug: self.yields.get(key, None) {self.yields.get(key, None)}')
-                # print(f'Debug: self.yields[key][0] {self.yields[key][0]} ')
-                # print(f'Debug: self.yields[key][1] {self.yields[key][1]}')
                 if self.yields.get(key, None) is None: continue
                 sum = np.sum(self.yields[key][0][start:stop])
                 err2 = np.sum(self.yields[key][1][start:stop])
@@ -148,7 +139,7 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
     input_root = ROOT.TFile.Open(input_shapes)
     print(f'Extracting yields from {input_shapes}')
     # hist_names = [ str(key.GetName()) for key in input_root.Get("cat_22preEE_tautau_res2b").GetListOfKeys() ] #fix this hard coding later
-    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() ]
+    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() if key.InheritsFrom("TH1") ]
     nuis_name_regex = re.compile('(.*)_(CMS_.*(Up|Down))')
     for hist_name in sorted(hist_names):
         if nonbkg_regex.match(hist_name) is not None:
@@ -162,9 +153,9 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
             unc_variation = ''
         if ignore_variations_regex.match(unc_variation):
             continue
-        if hist_name in ['cat_22preEE_tautau_res2b', 'cat_22preEE_tautau_res1b', 'cat_22preEE_tautau_boosted',
-                         'cat_22preEE_mutau_res2b', 'cat_22preEE_mutau_res1b', 'cat_22preEE_mutau_boosted',  
-                         'cat_22preEE_etau_res2b', 'cat_22preEE_etau_res1b', 'cat_22preEE_etau_boosted']: continue #fix this later
+        # if hist_name in ['cat_22preEE_tautau_res2b', 'cat_22preEE_tautau_res1b', 'cat_22preEE_tautau_boosted',
+        #                  'cat_22preEE_mutau_res2b', 'cat_22preEE_mutau_res1b', 'cat_22preEE_mutau_boosted',  
+        #                  'cat_22preEE_etau_res2b', 'cat_22preEE_etau_res1b', 'cat_22preEE_etau_boosted']: continue #fix this later
         hist = input_root.Get(hist_name)
         print(f'hist {hist} hist_name {hist_name} process {process}')
         hist_yield, hist_err2 = HistToNumpy(hist)
@@ -481,19 +472,14 @@ class BayesianOptimization:
 
     def JobDispatcher(self):
         while True:
-            # print('JobDispatcher')
             time.sleep(1)
-            # print(f'self.workers_dir {self.workers_dir}')
             for worker_dir in os.listdir(self.workers_dir):
                 worker_dir = os.path.join(self.workers_dir, worker_dir)
-                # print(f'os.path.isdir(worker_dir) {os.path.isdir(worker_dir)} {worker_dir}')
                 if not os.path.isdir(worker_dir): continue
                 task_file = os.path.join(worker_dir, 'task.txt')
                 task_file_tmp = os.path.join(worker_dir, '.task.txt')
-                # print(f'os.path.isfile(task_file) {os.path.isfile(task_file)}')
                 if os.path.isfile(task_file):
                     result_file = os.path.join(worker_dir, 'result.txt')
-                    # print(f'os.path.isfile(result_file) {os.path.isfile(result_file)}')
                     if os.path.isfile(result_file):
                         with open(result_file, 'r') as f:
                             result = json.load(f)
@@ -511,7 +497,6 @@ class BayesianOptimization:
                         os.remove(result_file)
                 else:
                     try:
-                        # print('task.txt doesnt exist')
                         binning = self.input_queue.get(True, 1)
                         if binning is None: return
                         task = {
@@ -575,11 +560,9 @@ if __name__ == '__main__':
             if len(p) != 2:
                 raise RuntimeError('invalid parameter definition "{}"'.format(param))
             param_dict[p[0]] = p[1]
-
-    ref_bkgs = {
-        'DY': re.compile('^DY$'),
-        'TT': re.compile('^TT$'),
-    }
+    ref_bkgs = {}
+    for main_bkg in input_binning_opt_config_dict["background"]["main"]:
+        ref_bkgs[f'{main_bkg}'] = re.compile(f'^{main_bkg}$')
 
     nonbkg_regex = re.compile('(data_obs|^ggHH.*|^qqHH.*|^DY_[0-2]b.*)')
     ignore_unc_variations = re.compile('(CMS_bbtt_201[6-8]_DYSFunc[0-9]+|CMS_bbtt_.*_QCDshape)(Up|Down)')
@@ -608,9 +591,9 @@ if __name__ == '__main__':
                               bkg_yields=bkg_yields,
                               input_queue_size=2, random_seed=None,
                               other_datacards=other_datacards)
-    # print("here")
+
     bo.maximize(20)
-    # print("here here")
+
 
     print('Minimization finished.')
     print('Best binning: {}'.format(arrayToStr(bo.best_binning.edges)))

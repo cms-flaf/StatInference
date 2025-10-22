@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import yaml
 
 file_dir = os.path.dirname(os.path.abspath(__file__))
 pkg_dir = os.path.dirname(file_dir)
@@ -26,21 +27,21 @@ for var in [ 'HOME', 'ANALYSIS_PATH', 'ANALYSIS_DATA_PATH', 'X509_USER_PROXY', '
         cmssw_env[var] = os.environ[var]
 
 
-parser = argparse.ArgumentParser(description='Optimize binning for the given channel.')
-parser.add_argument('--input', required=True, type=str, help="input directory")
-parser.add_argument('--channel', required=True, type=str, help="channel_year")
-parser.add_argument('--output', required=True, type=str, help="output directory")
-parser.add_argument('--max-n-bins', required=False, type=int, default=20, help="maximum number of bins")
-parser.add_argument('--params', required=False, type=str, default=None,
-                    help="algorithm parameters in format param1=value1,param2=value2 ...")
-parser.add_argument('--categories', required=False, type=str,
-       default='res2b:r,res1b:r,boosted:r,classVBF:r_qqhh,classGGF:r,classttH:r_qqhh,classTT:r_qqhh,classDY:r_qqhh',
-       help="comma separated list of categories and pois: cat1:poi1,cat2:poi2 ...")
-parser.add_argument('--verbose', required=False, type=int, default=2, help="verbosity level")
-parser.add_argument('binning_suggestions', type=str, nargs='*',
-                    help="suggestions for binnings to try (e.g. best binnings from the previous round)")
+# parser = argparse.ArgumentParser(description='Optimize binning for the given channel.')
+# parser.add_argument('--input', required=True, type=str, help="input directory")
+# parser.add_argument('--channel', required=True, type=str, help="channel_year")
+# parser.add_argument('--output', required=True, type=str, help="output directory")
+# parser.add_argument('--max-n-bins', required=False, type=int, default=20, help="maximum number of bins")
+# parser.add_argument('--params', required=False, type=str, default=None,
+#                     help="algorithm parameters in format param1=value1,param2=value2 ...")
+# parser.add_argument('--categories', required=False, type=str,
+#        default='res2b:r,res1b:r,boosted:r,classVBF:r_qqhh,classGGF:r,classttH:r_qqhh,classTT:r_qqhh,classDY:r_qqhh',
+#        help="comma separated list of categories and pois: cat1:poi1,cat2:poi2 ...")
+# parser.add_argument('--verbose', required=False, type=int, default=2, help="verbosity level")
+# parser.add_argument('binning_suggestions', type=str, nargs='*',
+#                     help="suggestions for binnings to try (e.g. best binnings from the previous round)")
 
-args = parser.parse_args()
+# args = parser.parse_args()
 
 def sh_call(cmd, error_message, verbose=0):
     if verbose > 0:
@@ -66,98 +67,149 @@ def getBestBinning(log_file):
             best_binning = binning
     return best_binning
 
-categories = []
-for cat_entry in args.categories.split(','):
-    category, poi = cat_entry.split(':')
-    categories.append([category, poi])
+# categories = []
+# for cat_entry in args.categories.split(','):
+#     category, poi = cat_entry.split(':')
+#     categories.append([category, poi])
 
-output_dir = os.path.join(args.output, args.channel)
-workers_dir = os.path.join(output_dir, 'workers')
-best_dir = os.path.join(output_dir, 'best')
+def optimize_channel(channel, output, era, categories, max_n_bins, verbose):
+    # output_dir = os.path.join(args.output, args.channel)
+    output_dir = os.path.join(output, channel+'_'+era)
+    workers_dir = os.path.join(output_dir, 'workers')
+    best_dir = os.path.join(output_dir, 'best')
 
-for d in [args.output, output_dir, workers_dir, best_dir]:
-    if not os.path.isdir(d):
-        os.mkdir(d)
+    for d in [output, output_dir, workers_dir, best_dir]: #for d in [args.output, output_dir, workers_dir, best_dir]:
+        if not os.path.isdir(d):
+            os.mkdir(d)
 
-suggested_binnings = {}
+    suggested_binnings = {}
 
-for bs_file in args.binning_suggestions:
-    with open(bs_file, 'r') as f:
-        bs = json.load(f)
-    if args.channel in bs:
-        for cat, cat_entry in bs[args.channel].items():
-            if cat not in suggested_binnings:
-                suggested_binnings[cat] = []
-            if type(cat_entry) == list:
-                if len(cat_entry) > 0:
-                    if type(cat_entry[0]) == list:
-                        for binning in cat_entry:
-                            suggested_binnings[cat].append(binning)
-                    else:
-                        suggested_binnings[cat].append(cat_entry)
-            elif type(cat_entry) == dict:
-                suggested_binnings[cat].append(cat_entry['bin_edges'])
+    for bs_file in binning_suggestions: #args.binning_suggestions:
+        with open(bs_file, 'r') as f:
+            bs = json.load(f)
+        if channel in bs: #if args.channel in bs:
+            for cat, cat_entry in bs[channel].items():#for cat, cat_entry in bs[args.channel].items():
+                if cat not in suggested_binnings:
+                    suggested_binnings[cat] = []
+                if type(cat_entry) == list:
+                    if len(cat_entry) > 0:
+                        if type(cat_entry[0]) == list:
+                            for binning in cat_entry:
+                                suggested_binnings[cat].append(binning)
+                        else:
+                            suggested_binnings[cat].append(cat_entry)
+                elif type(cat_entry) == dict:
+                    suggested_binnings[cat].append(cat_entry['bin_edges'])
+                else:
+                    raise RuntimeError("Unknown format of suggested binning in '{}'.".format(bs_file))
+
+    best_binnings_file = os.path.join(output_dir, 'best.json')
+    if os.path.isfile(best_binnings_file):
+        with open(best_binnings_file, 'r') as f:
+            best_binnings = json.load(f)
+    else:
+        best_binnings = { channel: {} } #{ args.channel: {} }
+
+    first_cat_index = 0
+    while first_cat_index < len(categories) and categories[first_cat_index][0] in best_binnings[channel]:#best_binnings[args.channel]:
+        first_cat_index += 1
+
+    for cat_index in range(first_cat_index, len(categories)):
+        category, poi = categories[cat_index]
+        print(f"Optimizing {channel} {category} for era {era}")
+        for file in os.listdir(input_dir):
+            if (channel in file or channel.lower() in file) and (category in file) and (era in file) and file.endswith('.txt'):
+                print(f"Found input datacard: {file}")
+                input_card = f'{input_dir}/{file}'
             else:
-                raise RuntimeError("Unknown format of suggested binning in '{}'.".format(bs_file))
+                continue
+        # input_card = f'{args.input}/hh_{category}_{args.channel}_13p6TeV.txt' # or more generally, f'{args.input}/*.txt'
+        cat_dir = os.path.join(output_dir, category)
+        if not os.path.isdir(cat_dir):
+            os.mkdir(cat_dir)
 
-best_binnings_file = os.path.join(output_dir, 'best.json')
-if os.path.isfile(best_binnings_file):
-    with open(best_binnings_file, 'r') as f:
-        best_binnings = json.load(f)
-else:
-    best_binnings = { args.channel: {} }
+        cat_suggestions = os.path.join(cat_dir, 'to_try.json')
+        if category in suggested_binnings:
+            with open(cat_suggestions, 'w') as f:
+                json.dump(suggested_binnings[category], f)
 
-first_cat_index = 0
-while first_cat_index < len(categories) and categories[first_cat_index][0] in best_binnings[args.channel]:
-    first_cat_index += 1
+        cat_log = os.path.join(cat_dir, 'results.json')
 
-for cat_index in range(first_cat_index, len(categories)):
-    category, poi = categories[cat_index]
-    print("Optimising {} {}...".format(args.channel, category))
-    input_card = f'{args.input}/hh_{category}_{args.channel}_13p6TeV.txt' # or more generally, f'{args.input}/*.txt'
-    cat_dir = os.path.join(output_dir, category)
-    if not os.path.isdir(cat_dir):
-        os.mkdir(cat_dir)
-
-    cat_suggestions = os.path.join(cat_dir, 'to_try.json')
-    if category in suggested_binnings:
-        with open(cat_suggestions, 'w') as f:
-            json.dump(suggested_binnings[category], f)
-
-    cat_log = os.path.join(cat_dir, 'results.json')
-
-    opt_cmd = f"python3 bin_opt/optimize_binning.py --input {input_card} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {args.max_n_bins} --poi {poi}"
-    if args.params is not None:
-        opt_cmd += f" --params {args.params} "
-    for cat_idx in range(cat_index):
-        cat = categories[cat_idx][0]
-        other_cat_file = '{}/hh_{}_{}_13p6TeV.txt'.format(best_dir, cat, args.channel)
-        if not os.path.isfile(other_cat_file):
-            raise RuntimeError('Datacard "{}" for previous category not found.'.format(other_cat_file))
-        opt_cmd += ' {} '.format(other_cat_file)
-    # sh_call(opt_cmd, "Error while running optimize_binning.py for {}".format(category), args.verbose)
-    ps_call(opt_cmd, shell=True, env=None, verbose=args.verbose)
-    cat_best = getBestBinning(cat_log)
-    if cat_best is None:
-        raise RuntimeError("Unable to find best binning for {}".format(category))
-    cat_best['poi'] = poi
-    bin_edges = ', '.join([ str(edge) for edge in cat_best['bin_edges'] ])
-    rebin_cmd = f'python bin_opt/rebinAndRunLimits.py --input {input_card} --output {best_dir} --bin-edges "{bin_edges}" --rebin-only '
-    # sh_call(rebin_cmd, f"Error while appllying best binning for {category} {args.channel}")
-    ps_call(rebin_cmd, shell=True, env=None, verbose=args.verbose)
-    best_binnings[args.channel][category] = cat_best
-    with open(best_binnings_file, 'w') as f:
-        f.write('{{\n\t"{}": {{\n'.format(args.channel))
-        for cat_idx in range(0, cat_index + 1):
+        opt_cmd = f"python3 bin_opt/optimize_binning.py --input {input_card} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
+        if params is not None: #args.params is not None:
+            opt_cmd += f" --params {params} " #opt_cmd += f" --params {args.params} "
+        for cat_idx in range(cat_index):
             cat = categories[cat_idx][0]
-            f.write('\t\t "{}": '.format(cat))
-            json.dump(best_binnings[args.channel][cat], f)
-            if cat_idx < cat_index:
-                f.write(",")
-            f.write("\n")
-        f.write("\t}\n}\n")
+            other_cat_file = f'{best_dir}/{input_card.split('/')[-1]}'
+            #other_cat_file = '{}/hh_{}_{}_13p6TeV.txt'.format(best_dir, cat, args.channel)
+            if not os.path.isfile(other_cat_file):
+                raise RuntimeError('Datacard "{}" for previous category not found.'.format(other_cat_file))
+            opt_cmd += f' {other_cat_file} '
+        # sh_call(opt_cmd, "Error while running optimize_binning.py for {}".format(category), args.verbose)
+        ps_call(opt_cmd, shell=True, env=None, verbose=verbose)
+        cat_best = getBestBinning(cat_log)
+        if cat_best is None:
+            raise RuntimeError("Unable to find best binning for {}".format(category))
+        cat_best['poi'] = poi
+        bin_edges = ', '.join([ str(edge) for edge in cat_best['bin_edges'] ])
+        rebin_cmd = f'python3 bin_opt/rebinAndRunLimits.py --input {input_card} --output {best_dir} --bin-edges "{bin_edges}" --rebin-only '
+        # sh_call(rebin_cmd, f"Error while appllying best binning for {category} {args.channel}")
+        ps_call(rebin_cmd, shell=True, env=None, verbose=verbose)
+        best_binnings[channel][category] #best_binnings[args.channel][category] = cat_best
+        with open(best_binnings_file, 'w') as f:
+            f.write('{{\n\t"{}": {{\n'.format(args.channel))
+            for cat_idx in range(0, cat_index + 1):
+                cat = categories[cat_idx][0]
+                f.write('\t\t "{}": '.format(cat))
+                json.dump(best_binnings[args.channel][cat], f)
+                if cat_idx < cat_index:
+                    f.write(",")
+                f.write("\n")
+            f.write("\t}\n}\n")
 
-final_binning_file = output_dir + '.json'
-shutil.copy(best_binnings_file, final_binning_file)
-print("Binning for {} has been successfully optimised. The results can be found in {}" \
-      .format(args.channel, final_binning_file))
+    final_binning_file = output_dir + '.json'
+    shutil.copy(best_binnings_file, final_binning_file)
+    print("Binning for {} has been successfully optimised. The results can be found in {}" \
+        .format(args.channel, final_binning_file))
+
+
+if __name__ == "__main__":
+    # parser = argparse.ArgumentParser(description='Optimize binning for the given channel.')
+    # parser.add_argument('--input', required=True, type=str, help="input directory")
+    # parser.add_argument('--channel', required=True, type=str, help="channel_year")
+    # parser.add_argument('--output', required=True, type=str, help="output directory")
+    # parser.add_argument('--max-n-bins', required=False, type=int, default=20, help="maximum number of bins")
+    # parser.add_argument('--params', required=False, type=str, default=None,
+    #                     help="algorithm parameters in format param1=value1,param2=value2 ...")
+    # parser.add_argument('--categories', required=False, type=str,
+    #     default='res2b:r,res1b:r,boosted:r,classVBF:r_qqhh,classGGF:r,classttH:r_qqhh,classTT:r_qqhh,classDY:r_qqhh',
+    #     help="comma separated list of categories and pois: cat1:poi1,cat2:poi2 ...")
+    # parser.add_argument('--verbose', required=False, type=int, default=2, help="verbosity level")
+    # parser.add_argument('binning_suggestions', type=str, nargs='*',
+    #                     help="suggestions for binnings to try (e.g. best binnings from the previous round)")
+
+    # args = parser.parse_args()
+
+    input_binning_opt_config = os.path.join(os.environ["ANALYSIS_PATH"], "StatInference", "bin_opt", "bin_optimization.yaml")
+    with open(input_binning_opt_config, "r") as f:
+        input_binning_opt_config_dict = yaml.safe_load(f)
+
+    input_dir = input_binning_opt_config_dict["input"].get("directory", ".")
+    channels = input_binning_opt_config_dict["input"].get("channels", [])
+    era = str(input_binning_opt_config_dict["input"].get("era", ""))
+    output = input_binning_opt_config_dict["output"].get("directory", args.output)
+    max_n_bins = input_binning_opt_config_dict["input"].get("max_n_optimized_bins", 20)
+    params = input_binning_opt_config_dict["input"].get("extra_parameters_optimize_binning", None)
+    categories_poi = input_binning_opt_config_dict["input"].get("categories_ParameterOfInterest", "res2b:r")
+    verbose = input_binning_opt_config_dict["output"].get("verbose", 0)
+    binning_suggestions = input_binning_opt_config_dict["input"].get("binning_suggestions", "")
+
+    categories = []
+    for cat_entry in categories_poi.split(','): #args.categories.split(','):
+        category, poi = cat_entry.split(':')
+        categories.append([category, poi])
+    
+    for channel in channels:
+        optimize_channel(channel, output, era, categories, max_n_bins, params, verbose)
+        if verbose > 0:
+            print(f"Finished optimizing channel: {channel}")
