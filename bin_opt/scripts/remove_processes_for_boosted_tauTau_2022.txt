@@ -1,6 +1,0 @@
-ttbarV_22preEE
-ttbarVV_22preEE
-W_22preEE
-ggH_22preEE_htt
-qqH_22preEE_htt
-QCD_22preEE

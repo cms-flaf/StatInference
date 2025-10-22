@@ -1,7 +1,0 @@
-ggHH_kl_5_kt_1_13p6TeV_22preEE_hbbhtt
-ttbarV_22preEE
-VV_22preEE
-WH_22preEE_htt
-ggH_22preEE_htt
-qqH_22preEE_htt
-QCD_22preEE
