@@ -38,15 +38,33 @@ def check_negative_yields(datacard, category, channel):
                 remove_processes_list.append(hist.GetName())
             else:
                 continue
+        elif hist.InheritsFrom("TDirectoryFile"):
+            shape_file.cd(hist.GetName())
+            for subkey in ROOT.gDirectory.GetListOfKeys():
+                subhist = subkey.ReadObj()
+                if subhist.Integral() == 0:
+                    print(f"Zero yield found for histogram {subhist.GetName()}")
+                    remove_processes_rules.writelines(f"{subhist.GetName()}\n")
+                    remove_processes_list.append(subhist.GetName())
+                elif subhist.Integral() < 0:
+                    print(f"Negative yield found for histogram {subhist.GetName()}")
+                    remove_processes_rules.writelines(f"{subhist.GetName()}\n")
+                    remove_processes_list.append(subhist.GetName())
+                else:
+                    continue
+            shape_file.cd()
         else:
             continue
-
-
+    print("remove_processes_list:", remove_processes_list)
+    shape_file.Close()
     if len(remove_processes_list) != 0:
+        # new_datacard = remove_processes(datacard, remove_processes_list)
         remove_processes(datacard, remove_processes_list)
     else:
         print('No negative or zero yields processes to remove.')
+        # new_datacard = datacard
     remove_processes_rules.close()
+    # return new_datacard
 
 def copy_processes(category, channel):
     for file in os.listdir(input_binning_opt_config_dict["input"]["directory_to_rename_processes"]):
@@ -68,7 +86,8 @@ def copy_processes(category, channel):
             print(f"In directory {subdir.GetName()} of file {shape_file.GetName()}")
             for subkey in subdir.GetListOfKeys():
                 if subkey.ReadObj().InheritsFrom("TH1"):
-                    if subkey.GetName() not in list_of_hists_not_to_copy:
+                    # if subkey.GetName() not in list_of_hists_not_to_copy:
+                    if subkey.GetName() == "data_obs":
                         print(f"copying histogram {subkey.GetName()} in shape file {shape_file}")
                         hist_to_copy = ROOT.gDirectory.Get(subkey.GetName())
                         shape_file.cd()
@@ -95,12 +114,12 @@ if __name__ == "__main__":
             for file in os.listdir(input_binning_opt_config_dict["input"]["directory_to_rename_processes"]):
 
                 if (category in file) and (channel.lower() in file or channel in file) and file.endswith(".txt"):
-                    print(f"Processing file: {file}")
+                    print(f"remove Processing file: {file}")
                     file_path = os.path.join(input_binning_opt_config_dict["input"]["directory_to_rename_processes"], file)
                     check_negative_yields(file_path, category, channel)
+                    print(f"rename Processing file: {file}")
                     rename_processes(file_path, rename_processes_rules)
+                    print(f"copy Processing file: {file}")
                     copy_processes(category, channel)
-                else:
-                    continue
 
     rename_processes_rules.close()

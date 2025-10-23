@@ -101,6 +101,44 @@ def baseline_equal_integral(shape_file, num_bins, signal_processes):
 
     return new_bin_edges
 
+def transform_binning(hist, binning, custom_bin_edges):
+    def clone_hist(*args, **kwargs):
+        clone = hist.__class__(
+            hist.GetName()+'_clone',
+            ";".join([hist.GetTitle(), hist.GetXaxis().GetTitle(), hist.GetYaxis().GetTitle()]),
+            *args,
+            **kwargs
+        )
+        clone.Sumw2()
+        return clone
+
+    if binning == "numbers":
+        n_bins = hist.GetNbinsX()
+        x_min = 0
+        x_max = n_bins + x_min
+        clone = clone_hist(n_bins, x_min, x_max)
+
+        # fill values
+        for b in range(1, n_bins + 1):
+            clone.SetBinContent(b, hist.GetBinContent(b))
+            clone.SetBinError(b, hist.GetBinError(b))
+        for b in range(0, n_bins+1):
+            clone.GetXaxis().ChangeLabel(b+1, labText=f"{custom_bin_edges[b]}")
+
+        clone.GetXaxis().SetNdivisions(len(custom_bin_edges), 2, 2)
+
+    elif binning == "numbers_width":
+        n_bins = hist.GetNbinsX()
+        x_min = 0.5
+        x_max = n_bins + 0.5
+        clone = clone_hist(n_bins, x_min, x_max)
+
+        # fill values
+        for b in range(1, n_bins + 1):
+            clone.SetBinContent(b, hist.GetBinContent(b) / hist.GetBinWidth(b))
+            clone.SetBinError(b, hist.GetBinError(b) / hist.GetBinWidth(b))
+
+    return clone
 
 
 if __name__ == "__main__":
@@ -141,6 +179,8 @@ if __name__ == "__main__":
             rebinned = hist.Rebin(len(new_bin_edges)-1, hist.GetTitle(), array.array('d', new_bin_edges))
             # rebinned = ROOT.TH1D(hist.GetName(), hist.GetName(), len(new_bin_edges)-1, array.array('d', new_bin_edges))
             # rebinAndFill(rebinned, hist)
+            rebinAndFill(rebinned, hist)
+            rebinned_equidistant = transform_binning(rebinned, "numbers", custom_edges)
 
         else:
             continue
@@ -148,9 +188,9 @@ if __name__ == "__main__":
         # out_dir.cd()
         output_rebinned_file.cd()
         #rebinned.Write()
+        rebinned_equidistant.Write()
         rebinned.Reset()
-
-
+        rebinned_equidistant.Reset()
 
     output_rebinned_file.Close()
     shape_file.Close()
