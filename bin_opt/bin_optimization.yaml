@@ -10,7 +10,7 @@ input:
   num_original_bins: 5000
   max_n_optimized_bins: 20
   verbose: 2
-  extra_parameters_optimize_binning: None #format: param1=value1,param2=value2
+  # extra_parameters_optimize_binning: #format: param1=value1,param2=value2
   binning_suggestions: ""
 
 output:

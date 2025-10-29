@@ -72,7 +72,7 @@ def getBestBinning(log_file):
 #     category, poi = cat_entry.split(':')
 #     categories.append([category, poi])
 
-def optimize_channel(channel, output, era, categories, max_n_bins, verbose):
+def optimize_channel(channel, output, era, categories, max_n_bins, params, verbose):
     # output_dir = os.path.join(args.output, args.channel)
     output_dir = os.path.join(output, channel+'_'+era)
     workers_dir = os.path.join(output_dir, 'workers')
@@ -87,8 +87,8 @@ def optimize_channel(channel, output, era, categories, max_n_bins, verbose):
     for bs_file in binning_suggestions: #args.binning_suggestions:
         with open(bs_file, 'r') as f:
             bs = json.load(f)
-        if channel in bs: #if args.channel in bs:
-            for cat, cat_entry in bs[channel].items():#for cat, cat_entry in bs[args.channel].items():
+        if channel+'_'+era in bs: #if args.channel in bs:
+            for cat, cat_entry in bs[channel+'_'+era].items():#for cat, cat_entry in bs[args.channel].items():
                 if cat not in suggested_binnings:
                     suggested_binnings[cat] = []
                 if type(cat_entry) == list:
@@ -108,10 +108,10 @@ def optimize_channel(channel, output, era, categories, max_n_bins, verbose):
         with open(best_binnings_file, 'r') as f:
             best_binnings = json.load(f)
     else:
-        best_binnings = { channel: {} } #{ args.channel: {} }
+        best_binnings = { channel+'_'+era: {} } #{ args.channel: {} }
 
     first_cat_index = 0
-    while first_cat_index < len(categories) and categories[first_cat_index][0] in best_binnings[channel]:#best_binnings[args.channel]:
+    while first_cat_index < len(categories) and categories[first_cat_index][0] in best_binnings[channel+'_'+f"{era}"]:#best_binnings[args.channel]:
         first_cat_index += 1
 
     for cat_index in range(first_cat_index, len(categories)):
@@ -119,8 +119,9 @@ def optimize_channel(channel, output, era, categories, max_n_bins, verbose):
         print(f"Optimizing {channel} {category} for era {era}")
         for file in os.listdir(input_dir):
             if (channel in file or channel.lower() in file) and (category in file) and (era in file) and file.endswith('.txt'):
-                print(f"Found input datacard: {file}")
                 input_card = f'{input_dir}/{file}'
+            if (channel in file or channel.lower() in file) and (category in file) and (era in file) and file.endswith('.root'):
+                input_shape = f'{input_dir}/{file}'
             else:
                 continue
         # input_card = f'{args.input}/hh_{category}_{args.channel}_13p6TeV.txt' # or more generally, f'{args.input}/*.txt'
@@ -134,13 +135,12 @@ def optimize_channel(channel, output, era, categories, max_n_bins, verbose):
                 json.dump(suggested_binnings[category], f)
 
         cat_log = os.path.join(cat_dir, 'results.json')
-
-        opt_cmd = f"python3 bin_opt/optimize_binning.py --input {input_card} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
+        opt_cmd = f"python3 bin_opt/optimize_binning.py --input {input_card}  --shape-file {input_shape} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
         if params is not None: #args.params is not None:
             opt_cmd += f" --params {params} " #opt_cmd += f" --params {args.params} "
         for cat_idx in range(cat_index):
             cat = categories[cat_idx][0]
-            other_cat_file = f'{best_dir}/{input_card.split('/')[-1]}'
+            other_cat_file = f"{best_dir}/{input_card.split('/')[-1]}"
             #other_cat_file = '{}/hh_{}_{}_13p6TeV.txt'.format(best_dir, cat, args.channel)
             if not os.path.isfile(other_cat_file):
                 raise RuntimeError('Datacard "{}" for previous category not found.'.format(other_cat_file))
@@ -155,13 +155,13 @@ def optimize_channel(channel, output, era, categories, max_n_bins, verbose):
         rebin_cmd = f'python3 bin_opt/rebinAndRunLimits.py --input {input_card} --output {best_dir} --bin-edges "{bin_edges}" --rebin-only '
         # sh_call(rebin_cmd, f"Error while appllying best binning for {category} {args.channel}")
         ps_call(rebin_cmd, shell=True, env=None, verbose=verbose)
-        best_binnings[channel][category] #best_binnings[args.channel][category] = cat_best
+        best_binnings[channel+'_'+era][category] = cat_best #best_binnings[args.channel][category] = cat_best
         with open(best_binnings_file, 'w') as f:
-            f.write('{{\n\t"{}": {{\n'.format(args.channel))
+            f.write('{{\n\t"{}": {{\n'.format(channel+'_'+era))
             for cat_idx in range(0, cat_index + 1):
                 cat = categories[cat_idx][0]
                 f.write('\t\t "{}": '.format(cat))
-                json.dump(best_binnings[args.channel][cat], f)
+                json.dump(best_binnings[channel+'_'+era][cat], f)
                 if cat_idx < cat_index:
                     f.write(",")
                 f.write("\n")
@@ -170,7 +170,7 @@ def optimize_channel(channel, output, era, categories, max_n_bins, verbose):
     final_binning_file = output_dir + '.json'
     shutil.copy(best_binnings_file, final_binning_file)
     print("Binning for {} has been successfully optimised. The results can be found in {}" \
-        .format(args.channel, final_binning_file))
+        .format(channel+'_'+era, final_binning_file)) #.format(args.channel, final_binning_file))
 
 
 if __name__ == "__main__":
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     input_dir = input_binning_opt_config_dict["input"].get("directory", ".")
     channels = input_binning_opt_config_dict["input"].get("channels", [])
     era = str(input_binning_opt_config_dict["input"].get("era", ""))
-    output = input_binning_opt_config_dict["output"].get("directory", args.output)
+    output = input_binning_opt_config_dict["output"].get("directory", "")
     max_n_bins = input_binning_opt_config_dict["input"].get("max_n_optimized_bins", 20)
     params = input_binning_opt_config_dict["input"].get("extra_parameters_optimize_binning", None)
     categories_poi = input_binning_opt_config_dict["input"].get("categories_ParameterOfInterest", "res2b:r")

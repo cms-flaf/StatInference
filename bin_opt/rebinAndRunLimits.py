@@ -166,6 +166,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     output_datacard = os.path.join(output_dir, input_name + '.txt')
     output_shapes = os.path.join(output_dir, input_shapes) #os.path.join(output_dir, input_name + '.input.root')
     print('inside GetLimits')
+    print(f'input_datacard: {input_datacard}')
     print(f'input_name: {input_name}')
     print(f'input_shapes: {input_shapes}')
     print(f'output_datacard: {output_datacard}')
@@ -178,14 +179,14 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         if os.path.exists(out_file):
             os.remove(out_file)
     shutil.copy(input_datacard, output_datacard)
-    input_root = ROOT.TFile.Open(input_shapes)
+    input_root = ROOT.TFile.Open(os.path.dirname(input_datacard) + '/'+ input_shapes)
     output_root = ROOT.TFile(output_shapes, 'RECREATE', '', 209)
     bin_edges_v = ListToVector(bin_edges, 'double')
 
     processes_to_remove = []
     nuissances_to_remove = []
 
-    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() if key.InheritsFrom("TH1") ]
+    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys()]
     name_regex = re.compile('(.*)_(CMS_.*)(Up|Down)')
 
     ROOT.TH1.AddDirectory(False)
@@ -200,11 +201,12 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
             process_name = hist_name
             is_central = True
         if process_name in processes_to_remove: continue
-        # if hist_name in ['cat_22preEE_tautau_res2b', 'cat_22preEE_tautau_res1b', 'cat_22preEE_tautau_boosted',
-        #                  'cat_22preEE_mutau_res2b', 'cat_22preEE_mutau_res1b', 'cat_22preEE_mutau_boosted',  
-        #                  'cat_22preEE_etau_res2b', 'cat_22preEE_etau_res1b', 'cat_22preEE_etau_boosted']: 
-        #     continue #fix this later on renamed processes shape files
+
         hist_orig = input_root.Get(hist_name)
+        if hist_orig.IsA().InheritsFrom(ROOT.TH1.Class()) == False:
+            if verbose > 1:
+                print('Skipping non-histogram object (i.e. TDirectory): {}'.format(hist_name))
+            continue
         hist_new = ROOT.TH1F(hist_name, hist_orig.GetTitle(), bin_edges_v.size() - 1, bin_edges_v.data())
         RebinAndFill(hist_new, hist_orig)
         if FixNegativeContributions(hist_new):
@@ -217,8 +219,6 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
 
     input_root.Close()
     output_root.Close()
-    print('input and output files closed')
-    # print(f'processes_to_remove: {processes_to_remove}')
     if len(processes_to_remove):
         proc_str = " ".join(processes_to_remove)
         if verbose > 0:
@@ -279,21 +279,11 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     # law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
     #           .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
     if input_binning_opt_config_dict["analysis"]=="hh_bbtautau" and input_binning_opt_config_dict["analysis_type"]=="nonresonant":
-        law_cmd = f'''
-                    law run {input_binning_opt_config_dict["inference"]["law_task"]}
-                    --version {version}
-                    --hh-model {input_binning_opt_config_dict["inference"]["hh_model"]}
-                    --datacards {datacards_str}
-                    --pois {poi}
-                    --scan-parameters kl,1,1,1
-                    '''
+        law_cmd = "law run {} --version {} --hh-model {} --datacards {} --pois {} --scan-parameters kl,1,1,1".format(input_binning_opt_config_dict["inference"]["law_task"], version, input_binning_opt_config_dict["inference"]["hh_model"], datacards_str, poi)
+
     if input_binning_opt_config_dict["analysis"]=="hh_bbww" and input_binning_opt_config_dict["analysis_type"]=="resonant":
-        law_cmd = f'''
-                    law run {input_binning_opt_config_dict["inference"]["law_task"]}
-                    --version {version}
-                    --datacards {datacards_str}
-                    --remove-output 3,a,y
-                    '''
+        law_cmd = "law run {} --version {version} --datacards {datacards_str} --remove-output 3,a,y".format(input_binning_opt_config_dict["inference"]["law_task"],version, datacards_str)
+
     # law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
     #           .format(version, 'hh_model_NNLOFix_13p6.model_default', datacards_str, poi, 'kl,1,1,1')
 
@@ -329,7 +319,6 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         if not isinstance(line, str) or line is None:
             continue
         lim = limit_regex.match(line)
-        print(f'debug lim {lim}')
         if lim is not None:
             return float(lim.group(1))
 

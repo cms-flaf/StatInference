@@ -19,12 +19,13 @@ from rebinAndRunLimits import GetLimits
 # args = parser.parse_args()
 
 for channel in input_binning_opt_config_dict["input"]["channels"]:
-    worker_dir = os.path.join(os.makedirs(input_binning_opt_config_dict["output"]["directory"], exist_ok=True),
-                                        channel+'_'+input_binning_opt_config_dict["input"].get("era", ""),
+    worker_dir = os.path.join(input_binning_opt_config_dict["output"]["directory"],
+    f'{channel}_{str(input_binning_opt_config_dict["input"].get("era", ""))}',
                                         "workers",
                                         uuid.uuid4().hex)
     # worker_dir = os.path.join(args.output, uuid.uuid4().hex)
-    os.mkdir(worker_dir)
+    # os.mkdir(worker_dir)
+    os.makedirs(worker_dir, exist_ok=True)
     task_file = os.path.join(worker_dir, 'task.txt')
     result_file = os.path.join(worker_dir, 'result.txt')
     result_file_tmp = os.path.join(worker_dir, '.result.txt')
@@ -34,34 +35,38 @@ for channel in input_binning_opt_config_dict["input"]["channels"]:
     if verbose > 0:#args.verbose > 0:
         print('Worker dir: {}'.format(worker_dir))
 
-    while True:
-        time.sleep(1)
-        if os.path.isfile(task_file) and not os.path.isfile(result_file):
-            try:
-                with open(task_file, 'r') as f:
-                    params = json.load(f)
-            except IOError:
-                continue
-            bin_edges = params['bin_edges']
-            if verbose > 0:#args.verbose > 0:
-                print('Bin edges: [ {} ]'.format(', '.join([ str(b) for b in bin_edges ])))
-            limit = GetLimits(params['input_datacard'], worker_dir, bin_edges, params['poi'], verbose=1,
-                                other_datacards=params['other_datacards'])
-            #adding the following to skip bins where no limit is calculated and the binning is not saved. Bayesian optimization cannot handle None values
-            # try:
-            #     limit = GetLimits(params['input_datacard'], worker_dir, bin_edges, params['poi'], verbose=1,
-            #                       other_datacards=params['other_datacards'])
-            # except RuntimeError as e:
-            #     print(f"Error occurred while getting limits: {e}")
-            #     continue
-            # print('back in rebinAndRunLimitsWorker after running limits')
-            if verbose > 0: #args.verbose > 0:
-                print('Expected 95% CL limit = {}'.format(limit))
-            result = {
-                'input_datacard': params['input_datacard'],
-                'bin_edges': bin_edges,
-                'exp_limit': limit
-            }
-            with open(result_file_tmp, 'w') as f:
-                json.dump(result, f)
-            shutil.move(result_file_tmp, result_file)
+    if os.path.isfile(os.path.join(input_binning_opt_config_dict["output"]["directory"],
+                                   f'{channel}_{str(input_binning_opt_config_dict["input"].get("era", ""))}.json')):
+                                   print( f"Results for channel {channel} already exist.")
+    else:
+        while True:
+            time.sleep(1)
+            if os.path.isfile(task_file) and not os.path.isfile(result_file):
+                try:
+                    with open(task_file, 'r') as f:
+                        params = json.load(f)
+                except IOError:
+                    continue
+                bin_edges = params['bin_edges']
+                if verbose > 0:#args.verbose > 0:
+                    print('Bin edges: [ {} ]'.format(', '.join([ str(b) for b in bin_edges ])))
+                limit = GetLimits(params['input_datacard'], worker_dir, bin_edges, params['poi'], verbose=1,
+                                    other_datacards=params['other_datacards'])
+                #adding the following to skip bins where no limit is calculated and the binning is not saved. Bayesian optimization cannot handle None values
+                # try:
+                #     limit = GetLimits(params['input_datacard'], worker_dir, bin_edges, params['poi'], verbose=1,
+                #                       other_datacards=params['other_datacards'])
+                # except RuntimeError as e:
+                #     print(f"Error occurred while getting limits: {e}")
+                #     continue
+                # print('back in rebinAndRunLimitsWorker after running limits')
+                if verbose > 0: #args.verbose > 0:
+                    print('Expected 95% CL limit = {}'.format(limit))
+                result = {
+                    'input_datacard': params['input_datacard'],
+                    'bin_edges': bin_edges,
+                    'exp_limit': limit
+                }
+                with open(result_file_tmp, 'w') as f:
+                    json.dump(result, f)
+                shutil.move(result_file_tmp, result_file)

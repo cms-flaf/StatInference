@@ -78,6 +78,7 @@ class Yields:
             key = (name, unc_variation)
             if key not in self.yields:
                 self.yields[key] = [ np.zeros(self.n_bins), np.zeros(self.n_bins) ]
+
             self.yields[key][0] += yields
             self.yields[key][1] += err2
 
@@ -85,11 +86,13 @@ class Yields:
         total_yield = {}
         for process in self.processes:
             is_ref = process != 'total'
+
             for unc_variation in self.unc_variations:
                 is_central = unc_variation == ''
                 if not is_central and not self.consider_non_central: continue
                 key = (process, unc_variation)
                 if self.yields.get(key, None) is None: continue
+
                 sum = np.sum(self.yields[key][0][start:stop])
                 err2 = np.sum(self.yields[key][1][start:stop])
                 err = math.sqrt(err2)
@@ -109,6 +112,7 @@ class Yields:
                     return False, -1
                 if not is_ref:
                     total_yield[unc_variation] = (sum, err)
+
         rel_err = total_yield[''][1] / total_yield[''][0]
         max_delta = 0
         if self.consider_non_central:
@@ -138,8 +142,9 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
 
     input_root = ROOT.TFile.Open(input_shapes)
     print(f'Extracting yields from {input_shapes}')
-    # hist_names = [ str(key.GetName()) for key in input_root.Get("cat_22preEE_tautau_res2b").GetListOfKeys() ] #fix this hard coding later
-    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() if key.InheritsFrom("TH1") ]
+
+    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() ]
+
     nuis_name_regex = re.compile('(.*)_(CMS_.*(Up|Down))')
     for hist_name in sorted(hist_names):
         if nonbkg_regex.match(hist_name) is not None:
@@ -153,11 +158,12 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
             unc_variation = ''
         if ignore_variations_regex.match(unc_variation):
             continue
-        # if hist_name in ['cat_22preEE_tautau_res2b', 'cat_22preEE_tautau_res1b', 'cat_22preEE_tautau_boosted',
-        #                  'cat_22preEE_mutau_res2b', 'cat_22preEE_mutau_res1b', 'cat_22preEE_mutau_boosted',  
-        #                  'cat_22preEE_etau_res2b', 'cat_22preEE_etau_res1b', 'cat_22preEE_etau_boosted']: continue #fix this later
+
         hist = input_root.Get(hist_name)
-        print(f'hist {hist} hist_name {hist_name} process {process}')
+        if hist.IsA().InheritsFrom(ROOT.TH1.Class()) == False:
+            print(f'Skipping non-TH1 object (i.e. TDirectory): {hist_name}')
+            continue
+
         hist_yield, hist_err2 = HistToNumpy(hist)
         yields.addProcess(process, hist_yield, hist_err2, unc_variation)
     input_root.Close()
@@ -434,7 +440,6 @@ class BayesianOptimization:
         utility_index = 0
         open_request_sleep = 1
         while n < n_eq_steps:
-            # print(f'PointGenerator: n {n}, n_eq_steps {n_eq_steps}')
             point = self.suggest(utility_index)
 
             rel_thrs = np.zeros(len(point))
@@ -467,7 +472,7 @@ class BayesianOptimization:
                 if n == n_eq_steps - 1:
                     self.print('Waiting for open requests to finish...')
                     self.waitOpenRequestsToFinish()
-        # print('PointGenerator')
+
         self.input_queue.put(None)
 
     def JobDispatcher(self):
@@ -507,7 +512,6 @@ class BayesianOptimization:
                         }
                         with open(task_file_tmp, 'w') as f:
                             json.dump(task, f)
-                            print(f'Task written to {task_file_tmp}')
                         shutil.move(task_file_tmp, task_file)
                     except queue.Empty:
                         pass
@@ -534,6 +538,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Find optimal binning that minimises the expected limits.')
     parser.add_argument('--input', required=True, type=str, help="input datacard")
+    parser.add_argument('--shape-file', required=True, type=str, help='shape file to optimize')
     parser.add_argument('--output', required=True, type=str, help="output directory")
     parser.add_argument('--workers-dir', required=True, type=str, help="output directory for workers results")
     parser.add_argument('--max_n_bins', required=True, type=int, help="maximum number of bins")
@@ -548,7 +553,8 @@ if __name__ == '__main__':
 
     input_datacard = os.path.abspath(args.input)
     input_name = os.path.splitext(os.path.basename(input_datacard))[0]
-    input_shapes = os.path.splitext(input_datacard)[0] + '.input.root'
+    # input_shapes = os.path.splitext(input_datacard)[0] + '.input.root'
+    input_shapes = os.path.abspath(args.shape_file)
 
     other_datacards = [ os.path.abspath(p) for p in args.other_datacards ]
 
@@ -566,7 +572,7 @@ if __name__ == '__main__':
 
     nonbkg_regex = re.compile('(data_obs|^ggHH.*|^qqHH.*|^DY_[0-2]b.*)')
     ignore_unc_variations = re.compile('(CMS_bbtt_201[6-8]_DYSFunc[0-9]+|CMS_bbtt_.*_QCDshape)(Up|Down)')
-    print("Extracting yields for background processes...")
+    print("Extracting yields for background processes...", ref_bkgs)
     bkg_yields = ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_unc_variations)
     bkg_yields.printSummary()
 
