@@ -72,7 +72,7 @@ def getBestBinning(log_file):
 #     category, poi = cat_entry.split(':')
 #     categories.append([category, poi])
 
-def optimize_channel(channel, output, era, categories, max_n_bins, params, verbose):
+def optimize_channel(channel, output, era, categories, max_n_bins, params, binning_suggestions, verbose):
     # output_dir = os.path.join(args.output, args.channel)
     output_dir = os.path.join(output, channel+'_'+era)
     workers_dir = os.path.join(output_dir, 'workers')
@@ -85,23 +85,27 @@ def optimize_channel(channel, output, era, categories, max_n_bins, params, verbo
     suggested_binnings = {}
 
     for bs_file in binning_suggestions: #args.binning_suggestions:
-        with open(bs_file, 'r') as f:
-            bs = json.load(f)
-        if channel+'_'+era in bs: #if args.channel in bs:
-            for cat, cat_entry in bs[channel+'_'+era].items():#for cat, cat_entry in bs[args.channel].items():
-                if cat not in suggested_binnings:
-                    suggested_binnings[cat] = []
-                if type(cat_entry) == list:
-                    if len(cat_entry) > 0:
-                        if type(cat_entry[0]) == list:
-                            for binning in cat_entry:
-                                suggested_binnings[cat].append(binning)
-                        else:
-                            suggested_binnings[cat].append(cat_entry)
-                elif type(cat_entry) == dict:
-                    suggested_binnings[cat].append(cat_entry['bin_edges'])
-                else:
-                    raise RuntimeError("Unknown format of suggested binning in '{}'.".format(bs_file))
+        if os.path.isfile(bs_file):
+            print(f"Loading suggested binnings from {bs_file}")
+            with open(bs_file, 'r') as f:
+                bs = json.load(f)
+            if channel+'_'+era in bs: #if args.channel in bs:
+                for cat, cat_entry in bs[channel+'_'+era].items():#for cat, cat_entry in bs[args.channel].items():
+                    if cat not in suggested_binnings:
+                        suggested_binnings[cat] = []
+                    if type(cat_entry) == list:
+                        if len(cat_entry) > 0:
+                            if type(cat_entry[0]) == list:
+                                for binning in cat_entry:
+                                    suggested_binnings[cat].append(binning)
+                            else:
+                                suggested_binnings[cat].append(cat_entry)
+                    elif type(cat_entry) == dict:
+                        suggested_binnings[cat].append(cat_entry['bin_edges'])
+                    else:
+                        raise RuntimeError("Unknown format of suggested binning in '{}'.".format(bs_file))
+        else:
+            raise RuntimeError("Suggested_binnings file '{}' not found. Check cwd or fix bin_opt yaml file".format(bs_file))
 
     best_binnings_file = os.path.join(output_dir, 'best.json')
     if os.path.isfile(best_binnings_file):
@@ -202,7 +206,7 @@ if __name__ == "__main__":
     params = input_binning_opt_config_dict["input"].get("extra_parameters_optimize_binning", None)
     categories_poi = input_binning_opt_config_dict["input"].get("categories_ParameterOfInterest", "res2b:r")
     verbose = input_binning_opt_config_dict["output"].get("verbose", 0)
-    binning_suggestions = input_binning_opt_config_dict["input"].get("binning_suggestions", "")
+    binning_suggestions = input_binning_opt_config_dict["input"].get("binning_suggestions", [])
 
     categories = []
     for cat_entry in categories_poi.split(','): #args.categories.split(','):
@@ -210,6 +214,6 @@ if __name__ == "__main__":
         categories.append([category, poi])
     
     for channel in channels:
-        optimize_channel(channel, output, era, categories, max_n_bins, params, verbose)
+        optimize_channel(channel, output, era, categories, max_n_bins, params, binning_suggestions, verbose)
         if verbose > 0:
             print(f"Finished optimizing channel: {channel}")

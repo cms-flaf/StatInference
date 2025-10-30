@@ -174,7 +174,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     if verbose > 0:
         print("Preparing datacards and shapes...")
     if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
     for out_file in [output_datacard, output_shapes]:
         if os.path.exists(out_file):
             os.remove(out_file)

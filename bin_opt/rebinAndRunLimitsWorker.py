@@ -19,26 +19,26 @@ from rebinAndRunLimits import GetLimits
 # args = parser.parse_args()
 
 for channel in input_binning_opt_config_dict["input"]["channels"]:
-    worker_dir = os.path.join(input_binning_opt_config_dict["output"]["directory"],
-    f'{channel}_{str(input_binning_opt_config_dict["input"].get("era", ""))}',
-                                        "workers",
-                                        uuid.uuid4().hex)
-    # worker_dir = os.path.join(args.output, uuid.uuid4().hex)
-    # os.mkdir(worker_dir)
-    os.makedirs(worker_dir, exist_ok=True)
-    task_file = os.path.join(worker_dir, 'task.txt')
-    result_file = os.path.join(worker_dir, 'result.txt')
-    result_file_tmp = os.path.join(worker_dir, '.result.txt')
-
-    verbose = input_binning_opt_config_dict.get("verbose", 1)
-
-    if verbose > 0:#args.verbose > 0:
-        print('Worker dir: {}'.format(worker_dir))
-
     if os.path.isfile(os.path.join(input_binning_opt_config_dict["output"]["directory"],
                                    f'{channel}_{str(input_binning_opt_config_dict["input"].get("era", ""))}.json')):
                                    print( f"Results for channel {channel} already exist.")
     else:
+        worker_dir = os.path.join(input_binning_opt_config_dict["output"]["directory"],
+        f'{channel}_{str(input_binning_opt_config_dict["input"].get("era", ""))}',
+                                            "workers",
+                                            uuid.uuid4().hex)
+        # worker_dir = os.path.join(args.output, uuid.uuid4().hex)
+        # os.mkdir(worker_dir)
+        os.makedirs(worker_dir, exist_ok=True)
+        task_file = os.path.join(worker_dir, 'task.txt')
+        result_file = os.path.join(worker_dir, 'result.txt')
+        result_file_tmp = os.path.join(worker_dir, '.result.txt')
+
+        verbose = input_binning_opt_config_dict.get("verbose", 1)
+
+        if verbose > 0:#args.verbose > 0:
+            print('Worker dir: {}'.format(worker_dir))
+
         while True:
             time.sleep(1)
             if os.path.isfile(task_file) and not os.path.isfile(result_file):
