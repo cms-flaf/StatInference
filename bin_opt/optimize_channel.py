@@ -144,7 +144,10 @@ def optimize_channel(channel, output, era, categories, max_n_bins, params, binni
             opt_cmd += f" --params {params} " #opt_cmd += f" --params {args.params} "
         for cat_idx in range(cat_index):
             cat = categories[cat_idx][0]
-            other_cat_file = f"{best_dir}/{input_card.split('/')[-1]}"
+            for file in os.listdir(best_dir):
+                if file.endswith('.txt') and cat in file:
+                    other_cat_file = f"{best_dir}/{file}"
+            # other_cat_file = f"{best_dir}/{input_card.split('/')[-1]}"
             #other_cat_file = '{}/hh_{}_{}_13p6TeV.txt'.format(best_dir, cat, args.channel)
             if not os.path.isfile(other_cat_file):
                 raise RuntimeError('Datacard "{}" for previous category not found.'.format(other_cat_file))

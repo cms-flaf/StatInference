@@ -253,11 +253,10 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         copied_other_datacards = []
         for other_datacard in other_datacards:
             other_basename = os.path.basename(other_datacard)
-            other_shapes = shape_file_name(other_datacard)[0]#os.path.splitext(other_datacard)[0] + '.input.root'
+            other_shapes = os.path.dirname(other_datacard) + '/' + shape_file_name(other_datacard)[0]#os.path.splitext(other_datacard)[0] + '.input.root'
             
             current_worker_dir_datacard = os.path.join(output_dir, other_basename)
             current_worker_dir_shapes = os.path.join(output_dir, os.path.basename(other_shapes))
-            
             if os.path.exists(other_datacard):
                 shutil.copy(other_datacard, current_worker_dir_datacard)
                 copied_other_datacards.append(current_worker_dir_datacard)
