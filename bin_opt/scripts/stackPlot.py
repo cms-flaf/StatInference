@@ -7,16 +7,6 @@ ROOT.gROOT.SetBatch(True)
 ROOT.gStyle.SetOptStat(0)
 ROOT.gStyle.SetOptTitle(0)
 
-# background_colors = [
-#     ROOT.kBlue-10,
-#     ROOT.kAzure-9,
-#     ROOT.kSpring+5,
-#     ROOT.kYellow-9,
-#     ROOT.kOrange-4,
-#     ROOT.kOrange+1,
-#     ROOT.kRed-10,
-#     ROOT.kPink+2
-# ]
 
 def reading_shape_file_histograms(input_hists):
     histogram_dicts = {}
@@ -41,6 +31,49 @@ def reading_shape_file_histograms(input_hists):
     # file.Close()
     return histogram_dicts
 
+def signal_hists(signal_hist_dict, sig_names):
+    signal_dict = {}
+    for sig in sig_names:
+        signal_dict[sig] = {}
+        signal_dict[sig]["hists"] = []
+        signal_dict[sig]["colors"] = []
+    ggF = None
+    VBF = None
+    for hist_name in signal_hist_dict:
+        hist = signal_hist_dict[hist_name]
+        if hist.GetName().startswith("ggHH"):
+            if ggF is None:
+                ggF = hist.Clone("ggF")
+                ggF.SetDirectory(0)
+                if not ggF.GetSumw2():
+                    ggF.Sumw2()
+            else:
+                ggF.Add(hist)
+                if not ggF.GetSumw2():
+                    ggF.Sumw2()
+
+
+        elif hist.GetName().startswith("qqHH"):
+            if VBF is None:
+                VBF = hist.Clone("VBF")
+                VBF.SetDirectory(0)
+                if not VBF.GetSumw2():
+                    VBF.Sumw2()
+            else:
+                VBF.Add(hist)
+                if not VBF.GetSumw2():
+                    VBF.Sumw2()
+            
+
+    signal_dict["ggF"]["hists"].append(ggF)
+    signal_dict["VBF"]["hists"].append(VBF)
+    if signal_dict["ggF"]["colors"]==[]: signal_dict["ggF"]["colors"].append(ROOT.kMagenta-10)
+    if signal_dict["VBF"]["colors"]==[]: signal_dict["VBF"]["colors"].append(ROOT.kTeal)
+    
+    print(signal_dict)
+    return signal_dict
+
+
 def background_hists(background_hist_dict, bkg_names):
     background_dict = {}
     for bkg in bkg_names:
@@ -51,7 +84,6 @@ def background_hists(background_hist_dict, bkg_names):
     background_dict["Others"]["hists"] = []
     background_dict["Others"]["colors"] = []
     
-    # print("Background names to plot:", background_dict)
 
     singleH = None
     others = None
@@ -64,6 +96,8 @@ def background_hists(background_hist_dict, bkg_names):
 
         elif hist.GetName()=="TT":
             background_dict["TT"]["hists"].append(hist)
+            for n in range(1, hist.GetNbinsX()+1):
+                print("TT bin:", n, "content:", hist.GetBinContent(n), "error:", hist.GetBinError(n))
             if background_dict["TT"]["colors"]==[]: background_dict["TT"]["colors"].append(ROOT.kOrange-2)
 
         elif hist.GetName()=="QCD":
@@ -80,7 +114,7 @@ def background_hists(background_hist_dict, bkg_names):
                 singleH.Add(hist)
                 if not singleH.GetSumw2():
                     singleH.Sumw2()
-            if background_dict["singleH"]["colors"]==[]: background_dict["singleH"]["colors"].append(ROOT.kAzure+6)
+            if background_dict["singleH"]["colors"]==[]: background_dict["singleH"]["colors"].append(ROOT.kAzure+10)
 
         else:
             if others is None:
@@ -99,11 +133,7 @@ def background_hists(background_hist_dict, bkg_names):
 
     total_bkg = None
     for bkg in background_dict:
-        # print(f"Background: {bkg}")
         for hist in background_dict[bkg]["hists"]:
-            # print(f"\tHistogram: {hist.GetName()}, Integral: {hist.Integral()}, NbBins: {hist.GetNbinsX()}")
-            # for n in range(1, hist.GetNbinsX()+1):
-            #     print("\t\tbin:", n, "content:", hist.GetBinContent(n), "error:", hist.GetBinError(n))
 
             if total_bkg is None:
                 total_bkg = hist.Clone("total_bkg")
@@ -115,8 +145,6 @@ def background_hists(background_hist_dict, bkg_names):
                 if not total_bkg.GetSumw2():
                     total_bkg.Sumw2()
 
-    # print(background_dict)
-    # print("total_bkg: ", total_bkg.Integral())
     return background_dict, total_bkg
 
 def uncertainty(total_bkg_hist):
@@ -139,7 +167,7 @@ def uncertainty(total_bkg_hist):
 
     return band
 
-def plot_stack_ratio(data_hist, bkg_hists_dict, total_bkg_hist, uncertainty_band_hist, output_path):
+def plot_stack_ratio(data_hist, bkg_hists_dict, total_bkg_hist, signal_hist, uncertainty_band_hist, output_path, want_data):
     canvas = ROOT.TCanvas("canvas", "", 800, 800)
 
     pad_main = ROOT.TPad("pad_main", "Main", 0, 0.3, 1, 1)
@@ -159,68 +187,80 @@ def plot_stack_ratio(data_hist, bkg_hists_dict, total_bkg_hist, uncertainty_band
     for bkg in sorted_bkg_hists_dict:
         for hist in bkg[1]["hists"]:
             hist.SetFillColor(bkg[1]["colors"][0])
-            hist.SetLineColor(ROOT.kBlack)
+            # hist.SetLineColor(ROOT.kBlack)
             stack.Add(hist)
 
     stack.Draw("HIST")
     stack.GetYaxis().SetTitleOffset(1.2)
     stack.GetYaxis().SetTitle("Events")
+    stack.SetMinimum(0.001) #0.01*stack.GetMinimum())
+    stack.SetMaximum(1000)
 
     uncertainty_band_hist.Draw("E2 SAME")
 
-    if data_hist:
-        data_hist.SetMarkerStyle(20)
-        data_hist.SetMarkerSize(1)
-        data_hist.SetLineColor(ROOT.kBlack)
-        #last bin blinded
-        data_hist.SetBinContent(data_hist.GetNbinsX(), 0)
-        data_hist.SetBinError(data_hist.GetNbinsX(), 0)
-
-        data_hist.Draw("E SAME")
+    for sig in signal_hist:
+        for hist in signal_hist[sig]["hists"]:
+            hist.SetLineColor(signal_hist[sig]["colors"][0])
+            hist.SetLineWidth(3)
+            hist.Draw("HIST SAME")
 
     pad_ratio.cd()
-    ratio = data_hist.Clone("ratio")
-    ratio.SetDirectory(0)
-    if not ratio.GetSumw2():
-        ratio.Sumw2()
-    if not total_bkg_hist.GetSumw2():
-        total_bkg_hist.Sumw2()
-    ratio.Divide(total_bkg_hist)
-    # for i in range(1, ratio.GetNbinsX()+1):
-    #     data_content = data_hist.GetBinContent(i)
-    #     bkg_content = total_bkg_hist.GetBinContent(i)
-    #     data_error = data_hist.GetBinError(i)
-    #     bkg_error = total_bkg_hist.GetBinError(i)
 
-    #     if bkg_content != 0:
-    #         ratio_content = data_content / bkg_content
-    #         ratio_error = math.sqrt( (data_error / bkg_content)**2 + (data_content * bkg_error / (bkg_content**2))**2 )
-    #     else:
-    #         ratio_content = 0
-    #         ratio_error = 0
+    # if want_data:
+    #     if data_hist:
+    #         data_hist.SetMarkerStyle(20)
+    #         data_hist.SetMarkerSize(1)
+    #         data_hist.SetLineColor(ROOT.kBlack)
+    #         #last bin blinded
+    #         data_hist.SetBinContent(data_hist.GetNbinsX(), 0)
+    #         data_hist.SetBinError(data_hist.GetNbinsX(), 0)
 
+    #         data_hist.Draw("E SAME")
+
+
+    #     ratio = data_hist.Clone("ratio")
+    #     ratio.SetDirectory(0)
+    #     if not ratio.GetSumw2():
+    #         ratio.Sumw2()
+    #     if not total_bkg_hist.GetSumw2():
+    #         total_bkg_hist.Sumw2()
+    #     ratio.Divide(total_bkg_hist)
+    #     # for i in range(1, ratio.GetNbinsX()+1):
+    #     #     data_content = data_hist.GetBinContent(i)
+    #     #     bkg_content = total_bkg_hist.GetBinContent(i)
+    #     #     data_error = data_hist.GetBinError(i)
+    #     #     bkg_error = total_bkg_hist.GetBinError(i)
+
+    #     #     if bkg_content != 0:
+    #     #         ratio_content = data_content / bkg_content
+    #     #         ratio_error = math.sqrt( (data_error / bkg_content)**2 + (data_content * bkg_error / (bkg_content**2))**2 )
+    #     #     else:
+    #     #         ratio_content = 0
+    #     #         ratio_error = 0
+
+    #     #     #last bin blinded
+    #     #     if i==ratio.GetNbinsX():
+    #     #         ratio_content = 0
+    #     #         ratio_error = 2
+
+    #     #     ratio.SetBinContent(i, ratio_content)
+    #     #     ratio.SetBinError(i, ratio_error)
     #     #last bin blinded
-    #     if i==ratio.GetNbinsX():
-    #         ratio_content = 0
-    #         ratio_error = 2
+    #     ratio.SetBinContent(ratio.GetNbinsX(), 0)
+    #     ratio.SetBinError(ratio.GetNbinsX(), 2)
 
-    #     ratio.SetBinContent(i, ratio_content)
-    #     ratio.SetBinError(i, ratio_error)
-    #last bin blinded
-    ratio.SetBinContent(ratio.GetNbinsX(), 0)
-    ratio.SetBinError(ratio.GetNbinsX(), 2)
+    #     ratio.GetYaxis().SetNdivisions(505)
+    #     ratio.GetYaxis().SetRangeUser(0.0, 2.0)
+    #     ratio.GetYaxis().SetTitle("Data / Bkg")
+    #     ratio.GetYaxis().SetTitleSize(0.12)
+    #     ratio.GetYaxis().SetLabelSize(0.08)
 
-    ratio.GetYaxis().SetNdivisions(505)
-    ratio.GetYaxis().SetRangeUser(0.0, 2.0)
-    ratio.GetYaxis().SetTitle("Data / Bkg")
-    ratio.GetYaxis().SetTitleSize(0.12)
-    ratio.GetYaxis().SetLabelSize(0.08)
+    #     ratio.GetXaxis().SetTitle("DNN HH output node")
+    #     ratio.GetXaxis().SetTitleSize(0.12)
+    #     ratio.GetXaxis().SetLabelSize(0.1)
+        
+    #     ratio.Draw("E")
 
-    ratio.GetXaxis().SetTitle("DNN HH output node")
-    ratio.GetXaxis().SetTitleSize(0.12)
-    ratio.GetXaxis().SetLabelSize(0.1)
-    
-    ratio.Draw("E")
     uncertainty_band_ratio = uncertainty_band_hist.Clone("bkg_rel_unc_ratio")
     for bin in range(1, uncertainty_band_ratio.GetNbinsX()+1):
         content = uncertainty_band_ratio.GetBinContent(bin)
@@ -233,7 +273,23 @@ def plot_stack_ratio(data_hist, bkg_hists_dict, total_bkg_hist, uncertainty_band
         uncertainty_band_ratio.SetBinError(bin, rel_error)
 
     uncertainty_band_ratio.SetDirectory(0)
-    uncertainty_band_ratio.Draw("E2 SAME")
+
+    uncertainty_band_ratio.GetYaxis().SetNdivisions(505)
+    uncertainty_band_ratio.GetYaxis().SetRangeUser(0.0, 2.0)
+    uncertainty_band_ratio.GetYaxis().SetTitle("Data / Bkg")
+    uncertainty_band_ratio.GetYaxis().SetTitleSize(0.12)
+    uncertainty_band_ratio.GetYaxis().SetLabelSize(0.08)
+
+    uncertainty_band_ratio.GetXaxis().SetTitle("DNN HH output node")
+    uncertainty_band_ratio.GetXaxis().SetTitleSize(0.12)
+    uncertainty_band_ratio.GetXaxis().SetLabelSize(0.1)
+
+    if want_data:
+        uncertainty_band_ratio.Draw("E2 SAME")
+    else:
+        uncertainty_band_ratio.Draw("E2")
+
+    pad_main.cd()
 
     legend = ROOT.TLegend(0.65, 0.6, 0.88, 0.88)
     legend.SetBorderSize(0)
@@ -243,8 +299,11 @@ def plot_stack_ratio(data_hist, bkg_hists_dict, total_bkg_hist, uncertainty_band
     for bkg in bkg_hists_dict:
         for hist in bkg_hists_dict[bkg]["hists"]:
             legend.AddEntry(hist, hist.GetName(), "f")
+    for sig in signal_hist:
+        for hist in signal_hist[sig]["hists"]:
+            legend.AddEntry(hist, "Expected "+sig+" HH", "l")
     legend.AddEntry(uncertainty_band_hist, "Bkg. uncert.", "f")
-    pad_main.cd()
+    
     legend.Draw()
 
     text_plot = ROOT.TLatex()
@@ -258,10 +317,11 @@ def plot_stack_ratio(data_hist, bkg_hists_dict, total_bkg_hist, uncertainty_band
     text_plot.SetTextFont(42)
     text_plot.DrawLatex(0.65, 0.92, "7.9804 fb^{-1} (13.6 TeV)")
 
-    text_plot.SetTextSize(0.03)
+    text_plot.SetTextSize(0.04)
     text_plot.DrawLatex(0.12, 0.87, "HH #rightarrow bb#tau#tau")
     text_plot.DrawLatex(0.25, 0.87, "res2b, #tau_{h}#tau_{h}")
     
+    canvas.Update()
     canvas.SaveAs(output_path)
 
 
@@ -269,9 +329,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_file", required=True, type=str, help="input file directory and file name")
     parser.add_argument("--output", required=True, type=str, help="output directory and file name (.png/.pdf). if no directory given, will save in the cwd")
-    parser.add_argument("--wantData", action='store_true', help="whether to plot data or not")
-    parser.add_argument("--data-name", required=False, type=str, default="data_obs", help="name of the data histogram in the input file")
-    parser.add_argument("--signal-name", required=False, type=str, default="ggHH_kl_1_kt_1_hbbhtt", help="comma separated signal names")
+    parser.add_argument("--wantData", required=True, type=bool, help="whether to plot data or not")
+    parser.add_argument("--signal-name", required=False, type=str, default="ggF,VBF", help="comma separated signal names")
     parser.add_argument("--bkg-names", required=True, type=str, help="comma-sparated names of background")
 
     args = parser.parse_args()
@@ -280,28 +339,12 @@ if __name__ == "__main__":
     file_dir = input_file.Get("tauTau/OS_Iso/res2b")
 
     hist_dict = reading_shape_file_histograms(file_dir)
-    # for key,value in hist_dict.items():
-    #     print(f"{key}")
-    #     print(f"{value}")
-    # print(hist_dict)
-    # for key in hist_dict:
-    #     print(key)
-    #     for hist_name in hist_dict[key]:
-    #         # hist = None
-    #         print("\t", hist_name)
-    #         # print(hist_dict[key][hist_name].InheritsFrom("TH1"))
-    #         hist = file_dir.Get(hist_dict[key][hist_name].GetName())
-    #         print("\t\t", hist.Integral(), hist.GetNbinsX(), hist.GetBinContent(hist.GetNbinsX()), hist.GetBinError(hist.GetNbinsX()), not hist.GetSumw2N())
-
-    # print(hist_dict["data"]["data_obs"].Integral())
-    # print(hist_dict["data"]["data_obs"].GetNbinsX())
-    # for n in range(1, hist_dict["data"]["data_obs"].GetNbinsX()+1):
-    #     print("bin:", n, "content:", hist_dict["data"]["data_obs"].GetBinContent(n), "error:", hist_dict["data"]["data_obs"].GetBinError(n))
 
     bkg_hist_dict, total_bkg_hist = background_hists(hist_dict["background"], args.bkg_names.split(","))
+    signal_hist_dict = signal_hists(hist_dict["signal"], args.signal_name.split(","))
     uncertainty_band_hist = uncertainty(total_bkg_hist)
-    plot_stack_ratio(hist_dict["data"]["data_obs"], bkg_hist_dict, total_bkg_hist,uncertainty_band_hist, args.output)
+    plot_stack_ratio(hist_dict["data"]["data_obs"], bkg_hist_dict, total_bkg_hist, signal_hist_dict, uncertainty_band_hist, args.output, args.wantData)
 
     input_file.Close()
 
-# $ python3 stackPlot.py --input_file /eos/user/t/toakhter/bin_opt_tests/bin_opt_test_oct_hamburg_v2/plotting_test/hh_res2b_tauTau_2022_13p6TeV.input.root --output /eos/user/t/toakhter/bin_opt_tests/bin_opt_test_oct_hamburg_v2/plotting_test/test_1.pdf --bkg-names DY,TT,QCD,singleH
+# $ python3 stackPlot.py --input_file /eos/user/t/toakhter/bin_opt_tests/bin_opt_test_oct_hamburg_v2/plotting_test/hh_res2b_tauTau_2022_13p6TeV.input.root --output /eos/user/t/toakhter/bin_opt_tests/bin_opt_test_oct_hamburg_v2/plotting_test/test_1.pdf --bkg-names DY,TT,QCD,singleH --wantData False
