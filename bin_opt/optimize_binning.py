@@ -20,15 +20,15 @@ with open(input_binning_opt_config, "r") as f:
     input_binning_opt_config_dict = yaml.safe_load(f)
 
 if input_binning_opt_config_dict["input"]["num_original_bins"] == 1000:
-    min_step = 0.001 #for 1000 bins
+    min_step = 0.001
     min_step_digits = -int(math.log10(min_step))
     step_int_scale = 10 ** min_step_digits
     max_value_int = step_int_scale
 
 if input_binning_opt_config_dict["input"]["num_original_bins"] == 5000:
     min_step = 0.0002
-    min_step_digits = -(math.log10(min_step)) #3.6989700043360187
-    step_int_scale = round(10 ** min_step_digits) #5000
+    min_step_digits = -(math.log10(min_step))
+    step_int_scale = round(10 ** min_step_digits) 
     max_value_int = step_int_scale
 
 def HistToNumpy(hist):
@@ -143,7 +143,24 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
     input_root = ROOT.TFile.Open(input_shapes)
     print(f'Extracting yields from {input_shapes}')
 
-    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys() ]
+    hist_names = []
+    for key in input_root.GetListOfKeys():
+
+        subdir = input_root.Get(key.GetName())
+        if subdir.IsA().InheritsFrom(ROOT.TDirectory.Class()):
+            hist_names = [str(k.GetName()) for k in subdir.GetListOfKeys()]
+            input_root_dir = input_root.Get(key.GetName())
+            
+        elif subdir.IsA().InheritsFrom(ROOT.TH1.Class()):
+            if str(key.GetName()) not in hist_names:
+                hist_names.append(str(key.GetName()))
+                input_root_dir = input_root
+            else:
+                continue
+
+        else:
+            raise RuntimeError("Check input shape file structure. currently checks inside one subdirectory")
+
 
     nuis_name_regex = re.compile('(.*)_(CMS_.*(Up|Down))')
     for hist_name in sorted(hist_names):
@@ -159,7 +176,7 @@ def ExtractYields(input_shapes, ref_bkgs, nonbkg_regex, ignore_variations_regex)
         if ignore_variations_regex.match(unc_variation):
             continue
 
-        hist = input_root.Get(hist_name)
+        hist = input_root_dir.Get(hist_name)
         if hist.IsA().InheritsFrom(ROOT.TH1.Class()) == False:
             print(f'Skipping non-TH1 object (i.e. TDirectory): {hist_name}')
             continue
@@ -264,9 +281,6 @@ class BayesianOptimization:
         self.bounds_transformer = None
         self.optimizer = bayes_opt.BayesianOptimization(f=None, pbounds=bounds, random_state=random_seed, verbose=1)
         self.utilities = [
-            # bayes_opt.util.UtilityFunction(kind='ucb', kappa=kappa, xi=xi),# kappa_decay=0.99), # supported in bayes_opt.__version__ <2.0.0
-            # bayes_opt.util.UtilityFunction(kind='ei', kappa=kappa, xi=xi),
-            # bayes_opt.util.UtilityFunction(kind='poi', kappa=kappa, xi=xi),
             bayes_opt.acquisition.UpperConfidenceBound(kappa=kappa),
             bayes_opt.acquisition.ExpectedImprovement(xi=xi),
             bayes_opt.acquisition.ProbabilityOfImprovement(xi=xi),
@@ -339,7 +353,6 @@ class BayesianOptimization:
     def suggest(self, utility_index):
         self.optimizer_lock.acquire()
         if self.suggestions is None or len(self.suggestions) == 0:
-            # point = self.optimizer.suggest(self.utilities[utility_index]) # bayes_opt.__version__ >=2.0.0 does not support passing utility functions
             point = self.optimizer.suggest()
         else:
             point = self.suggestions[0]
@@ -553,7 +566,6 @@ if __name__ == '__main__':
 
     input_datacard = os.path.abspath(args.input)
     input_name = os.path.splitext(os.path.basename(input_datacard))[0]
-    # input_shapes = os.path.splitext(input_datacard)[0] + '.input.root'
     input_shapes = os.path.abspath(args.shape_file)
 
     other_datacards = [ os.path.abspath(p) for p in args.other_datacards ]

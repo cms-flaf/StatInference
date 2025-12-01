@@ -27,12 +27,6 @@ input_binning_opt_config = os.path.join(os.environ["ANALYSIS_PATH"], "StatInfere
 with open(input_binning_opt_config, "r") as f:
     input_binning_opt_config_dict = yaml.safe_load(f)
 
-# cmssw_env = get_cmsenv(cmssw_path=os.getenv("FLAF_CMSSW_BASE")) #environment needs to be set up appropriately when GetLimits function is called to run law tasks such as UpperLimits or MergeResonantLimts
-# for var in [ 'HOME', 'ANALYSIS_PATH', 'ANALYSIS_DATA_PATH', 'X509_USER_PROXY', 'CENTRAL_STORAGE',
-#              'ANALYSIS_BIG_DATA_PATH', 'FLAF_CMSSW_BASE', 'FLAF_CMSSW_ARCH' ]:
-#     if var in os.environ:
-#         cmssw_env[var] = os.environ[var]
-
 clean_env = {k: os.environ[k] for k in [
     'HOME', 'USER', 'LOGNAME', 'PATH', 'SHELL', 'ANALYSIS_SOFT_PATH', 'FLAF_CMSSW_BASE'
 ] if k in os.environ}
@@ -92,15 +86,6 @@ def RebinAndFill(new_hist, old_hist):
 
         new_hist.SetBinContent(bin_new, cnt_upd)
         new_hist.SetBinError(bin_new, err_upd);
-    
-    def check_hist_for_nan_inf_neg(hist, hist_old_new, name):
-        arr = np.array([hist.GetBinContent(i+1) for i in range(hist.GetNbinsX())])
-        if np.any(np.isnan(arr)):
-            print(f'NaN found in {hist_old_new} {name}')
-        if np.any(np.isinf(arr)):
-            print(f'Inf found in {hist_old_new} {name}')
-        if np.any(arr < 0):
-            print(f'Negative values found in {hist_old_new} {name}')
 
     n_dim = old_hist.GetDimension()
     if new_hist.GetDimension() != n_dim:
@@ -114,8 +99,6 @@ def RebinAndFill(new_hist, old_hist):
     if n_dim > 1 and not check_range(old_hist.GetYaxis(), new_hist.GetYaxis()):
         raise RuntimeError("y ranges are not compatible")
 
-    # check_hist_for_nan_inf_neg(old_hist, 'old_hist', old_hist.GetName())
-
     for x_bin_old in range(old_hist.GetNbinsX() + 2):
         x_bin_new = get_new_bin(old_hist.GetXaxis(), new_hist.GetXaxis(), x_bin_old)
         if n_dim == 1:
@@ -126,8 +109,6 @@ def RebinAndFill(new_hist, old_hist):
                 bin_old = old_hist.GetBin(x_bin_old, y_bin_old)
                 bin_new = new_hist.GetBin(x_bin_new, y_bin_new)
                 add_bin_content(bin_old, bin_new)
-    
-    # check_hist_for_nan_inf_neg(new_hist, 'new_hist', new_hist.GetName())
 
 def FixNegativeContributions(histogram):
     correction_factor = 1e-7
@@ -162,9 +143,9 @@ def shape_file_name(input_datacard):
 
 def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=False, other_datacards=[]):
     input_name = os.path.splitext(os.path.basename(input_datacard))[0]
-    input_shapes = shape_file_name(input_datacard)[0]#os.path.splitext(input_datacard)[0] + '.input.root'
+    input_shapes = shape_file_name(input_datacard)[0]
     output_datacard = os.path.join(output_dir, input_name + '.txt')
-    output_shapes = os.path.join(output_dir, input_shapes) #os.path.join(output_dir, input_name + '.input.root')
+    output_shapes = os.path.join(output_dir, input_shapes)
     print('inside GetLimits')
     print(f'input_datacard: {input_datacard}')
     print(f'input_name: {input_name}')
@@ -186,7 +167,28 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     processes_to_remove = []
     nuissances_to_remove = []
 
-    hist_names = [ str(key.GetName()) for key in input_root.GetListOfKeys()]
+    hist_names = []
+    for key in input_root.GetListOfKeys():
+
+        subdir = input_root.Get(key.GetName())
+        if subdir.IsA().InheritsFrom(ROOT.TDirectory.Class()):
+            hist_names = [str(k.GetName()) for k in subdir.GetListOfKeys()]
+            input_root_dir = input_root.Get(key.GetName())
+            output_root.mkdir(key.GetName())
+            output_root_dir = output_root.Get(key.GetName())
+            
+        elif subdir.IsA().InheritsFrom(ROOT.TH1.Class()):
+            if str(key.GetName()) not in hist_names:
+                hist_names.append(str(key.GetName()))
+                input_root_dir = input_root
+                output_root_dir = output_root
+            else:
+                continue
+
+        else:
+            raise RuntimeError("Check input shape file structure. currently checks inside one subdirectory")
+
+
     name_regex = re.compile('(.*)_(CMS_.*)(Up|Down)')
 
     ROOT.TH1.AddDirectory(False)
@@ -202,7 +204,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
             is_central = True
         if process_name in processes_to_remove: continue
 
-        hist_orig = input_root.Get(hist_name)
+        hist_orig = input_root_dir.Get(hist_name)
         if hist_orig.IsA().InheritsFrom(ROOT.TH1.Class()) == False:
             if verbose > 1:
                 print('Skipping non-histogram object (i.e. TDirectory): {}'.format(hist_name))
@@ -210,7 +212,7 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         hist_new = ROOT.TH1F(hist_name, hist_orig.GetTitle(), bin_edges_v.size() - 1, bin_edges_v.data())
         RebinAndFill(hist_new, hist_orig)
         if FixNegativeContributions(hist_new):
-            output_root.WriteTObject(hist_new, hist_name, 'Overwrite')
+            output_root_dir.WriteTObject(hist_new, hist_name, 'Overwrite')
         else:
             if is_central:
                 processes_to_remove.append(process_name)
@@ -223,12 +225,9 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         proc_str = " ".join(processes_to_remove)
         if verbose > 0:
             print("Removing processes: {}".format(proc_str))
-        # sh_call('remove_processes.py {} {}'.format(output_datacard, proc_str),
-        #         'Error while running remove_processes.py', verbose)
-        try: #this is not working for some reason. Fixing the path to where this script is in inference/dhi/scripts or import dhi in cwd doesn't work. something to fix. running remove_processes in local terminal works just fine. trying this in a standalone script now (inference/dhi/scripts/remove_processes.sh)
-            # ps_call(f'python3 remove_processes.py {output_datacard} {proc_str} -d {output_dir}', 
-            #         shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n")
-            remove_processes(output_datacard, proc_str)
+        try:
+            cmd_rm_processes = "remove_processes.py {output_datacard} {proc_str} -d 'none'".format(output_datacard=output_datacard, proc_str=proc_str)
+            ps_call("bash -c 'source ../inference/setup.sh && " + cmd_rm_processes + " && source ../env.sh'", shell=True, env=clean_env, verbose=verbose)
         except Exception as e:
             print(f"Warning: Failed to remove processes {proc_str}: {e}")
             print("Continuing without removing processes...")
@@ -237,10 +236,12 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         nuis_str = " ".join(nuissances_to_remove)
         if verbose > 0:
             print("Removing nuissances: {}".format(nuis_str))
-        # sh_call('remove_parameters.py {} {}'.format(output_datacard, nuis_str),
-        #         'Error while running remove_parameters.py', verbose)
-        # ps_call(f'python3 remove_parameters.py {output_datacard} {nuis_str}', shell=True, env=clean_env, verbose=verbose)
-        remove_parameters(output_datacard, nuis_str)
+        try:
+            cmd_rm_parameter = "remove_parameters.py {output_datacard} {nuis_str} -d 'none'".format(output_datacard=output_datacard, nuis_str=nuis_str)
+            ps_call("bash -c 'source ../inference/setup.sh && " + cmd_rm_parameter + " && source ../env.sh'", shell=True, env=clean_env, verbose=verbose)
+        except Exception as e:
+            print(f"Warning: Failed to remove parameters {nuis_str}: {e}")
+            print("Continuing without removing parameters...")
     if rebin_only:
         return
     if verbose > 0:
@@ -248,12 +249,10 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
     version = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     datacards_str = output_datacard
     if len(other_datacards):
-        # datacards_str += ',' + ','.join(copied_datacards)
-        # when running the UpperLimits using combine (e.g. for tauTau channel, res1b category), the code looks for res2b input shape file in the same worker directory instead of the res2b best directory. but if the res2b optimization was done at a different time, the current worker directory will not have a copy of it
         copied_other_datacards = []
         for other_datacard in other_datacards:
             other_basename = os.path.basename(other_datacard)
-            other_shapes = os.path.dirname(other_datacard) + '/' + shape_file_name(other_datacard)[0]#os.path.splitext(other_datacard)[0] + '.input.root'
+            other_shapes = os.path.dirname(other_datacard) + '/' + shape_file_name(other_datacard)[0]
             
             current_worker_dir_datacard = os.path.join(output_dir, other_basename)
             current_worker_dir_shapes = os.path.join(output_dir, os.path.basename(other_shapes))
@@ -275,19 +274,14 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
 
         if copied_other_datacards:
             datacards_str += ',' + ','.join(copied_other_datacards)
-    # law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
-    #           .format(version, 'hh_model.model_default', datacards_str, poi, 'kl,1,1,1')
+
     if input_binning_opt_config_dict["analysis"]=="hh_bbtautau" and input_binning_opt_config_dict["analysis_type"]=="nonresonant":
-        law_cmd = "law run {} --version {} --hh-model {} --datacards {} --pois {} --scan-parameters kl,1,1,1".format(input_binning_opt_config_dict["inference"]["law_task"], version, input_binning_opt_config_dict["inference"]["hh_model"], datacards_str, poi)
+        law_cmd = "law run {} --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}".format(input_binning_opt_config_dict["inference"]["law_task"], version, input_binning_opt_config_dict["inference"]["hh_model"], datacards_str, poi, input_binning_opt_config_dict["inference"]["scan_parameters"])
 
     if input_binning_opt_config_dict["analysis"]=="hh_bbww" and input_binning_opt_config_dict["analysis_type"]=="resonant":
-        law_cmd = "law run {} --version {version} --datacards {datacards_str} --remove-output 3,a,y".format(input_binning_opt_config_dict["inference"]["law_task"],version, datacards_str)
-
-    # law_cmd = 'law run UpperLimits --version {} --hh-model {} --datacards {} --pois {} --scan-parameters {}' \
-    #           .format(version, 'hh_model_NNLOFix_13p6.model_default', datacards_str, poi, 'kl,1,1,1')
+        law_cmd = "law run {} --version {} --datacards {} --remove-output 3,a,y".format(input_binning_opt_config_dict["inference"]["law_task"],version, datacards_str)
 
 
-    # output = sh_call(law_cmd, "Error while running UpperLimits", verbose)
     output = ps_call(
         "bash -c 'source ../inference/setup.sh && " + law_cmd +
         " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate " +
@@ -295,8 +289,6 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
         shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n"
         )
 
-    # print('this is sad')
-    # print("ps_call output:", output)
     def check_combine_processes():
         result = subprocess.run("ps aux | grep combine | grep -v grep", shell=True, capture_output=True, text=True)
         print(result.stdout)
@@ -304,14 +296,14 @@ def GetLimits(input_datacard, output_dir, bin_edges, poi, verbose=1, rebin_only=
 
     if verbose > 0:
         print("Removing outputs...")
-    # sh_call(law_cmd + ' --remove-output 2,a,y ', "Error while removing combine outputs", verbose=2)
+
     ps_call(
         "bash -c ' source ../inference/setup.sh && " +
         law_cmd + " --remove-output 2,a,y " +
         " && source ../env.sh && source $ANALYSIS_SOFT_PATH/flaf_env/bin/activate' ",
         shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n"
     )
-    # ps_call(law_cmd + " --remove-output 2,a,y ", shell=True, env=clean_env, verbose=2, catch_stdout=True, split="\n")
+
     returned_code, output_lines, _ = output
     limit_regex = re.compile('^Expected 50.0%: {} < ([0-9\.]+)'.format(poi))
     for line in reversed(output_lines):
