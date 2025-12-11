@@ -353,6 +353,7 @@ class BayesianOptimization:
     def suggest(self, utility_index):
         self.optimizer_lock.acquire()
         if self.suggestions is None or len(self.suggestions) == 0:
+            self.optimizer._acquisition_function = self.utilities[utility_index]
             point = self.optimizer.suggest()
         else:
             point = self.suggestions[0]
@@ -477,7 +478,7 @@ class BayesianOptimization:
                     open_request_sleep = open_request_sleep * 2
                     utility_index = (utility_index + 1) % len(self.utilities)
             else:
-                self.print('Equivalent binnig found: {}'.format(arrayToStr(equivalent_binning.edges)))
+                self.print('Equivalent binning found: {}'.format(arrayToStr(equivalent_binning.edges)))
                 self.register(point, len(equivalent_binning.edges), equivalent_binning.exp_limit)
                 n += 1
                 if n >= 5:
