@@ -1,0 +1,30 @@
+analysis: hh_bbtautau #hh_bbww, H_mumu
+analysis_type: nonresonant #nonresonant, resonant
+
+input:
+  directory: /eos/user/t/toakhter/bin_opt_tests/bin_opt_test_nov_hamburg_v4
+  channels: ["tauTau", "muTau", "eTau"] #["e", "mu", "eE", "eMu", "muMu"]
+  categories_ParameterOfInterest: "res2b:r,res1b:r,boosted:r" #classVBF:r_qqhh,classGGF:r_qqhh,classttH:r_qqhh,classTT:r_qqhh,classDY:r_qqhh"
+  era: 2022
+  num_original_bins: 5000
+  max_n_optimized_bins: 20
+  verbose: 2
+  # extra_parameters_optimize_binning: #format: param1=value1,param2=value2
+  binning_suggestions: [] #[bin_opt/to_try.json]
+
+output:
+  directory: output/binning_run3_v4
+
+signal:
+  nonresonant:
+    ggF: ["ggHH_kl_1_kt_1_hbbhtt", "ggHH_kl_2p45_kt_1_hbbhtt", "ggHH_kl_5_kt_1_hbbhtt"]
+    VBF: ['qqHH_CV_1_C2V_1_kl_1_hbbhtt', 'qqHH_CV_1_C2V_0_kl_1_hbbhtt', 'qqHH_CV_1p74_C2V_1p37_kl_14p4_hbbhtt', 'qqHH_CV_m0p758_C2V_1p44_kl_m19p3_hbbhtt', 'qqHH_CV_m0p962_C2V_0p959_kl_m1p43_hbbhtt', 'qqHH_CV_m1p6_C2V_2p72_kl_m1p36_hbbhtt']
+
+background:
+  main: ["ttbar_", "DY"]
+
+inference:
+  law_task: UpperLimits #MergeResonantLimits
+  hh_model: dhi.models.hh_model_NNLOFix_13p6:model_default #dhi.models.hh_model:model_default
+  scan_parameters: kl,1,1,1 #colon seperated parameters to scan [format: parameter_1,start,stop,points;parameter_2,start,stop,points. e.g.: kl,-30,30,61:kt,-6,9,31]
+
