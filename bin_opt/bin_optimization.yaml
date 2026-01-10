@@ -11,9 +11,11 @@ input:
   verbose: 2
   # extra_parameters_optimize_binning: #format: param1=value1,param2=value2
   binning_suggestions: [] #[bin_opt/to_try.json]
+  number_of_workers: 5
+  worker_condor_max_runtime_hours: 72
 
 output:
-  directory: output/binning_run3_v4
+  directory: output_test/binning_run3_v4
 
 signal:
   nonresonant:
@@ -25,6 +27,6 @@ background:
 
 inference:
   law_task: UpperLimits #MergeResonantLimits
-  hh_model: dhi.models.hh_model_NNLOFix_13p6:model_default #dhi.models.hh_model:model_default
-  scan_parameters: kl,1,1,1 #colon seperated parameters to scan [format: parameter_1,start,stop,points;parameter_2,start,stop,points. e.g.: kl,-30,30,61:kt,-6,9,31]
+  hh_model: dhi.models.hh_model_NNLOFix_13p6:model_default #for nonresonant studies. dhi.models.hh_model:model_default
+  scan_parameters: kl,1,1,1 #colon seperated parameters to scan for nonresonant studies [format: parameter_1,start,stop,points;parameter_2,start,stop,points. e.g.: kl,-30,30,61:kt,-6,9,31]
 
