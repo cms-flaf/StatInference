@@ -57,7 +57,7 @@ def optimize_channel(channel, output, era, categories, max_n_bins, params, binni
 
     for d in [output, output_dir, workers_dir, best_dir]: 
         if not os.path.isdir(d):
-            os.mkdir(d)
+            os.makedirs(d)
 
     suggested_binnings = {}
 
@@ -163,7 +163,7 @@ if __name__ == "__main__":
         input_binning_opt_config_dict = yaml.safe_load(f)
 
     input_dir = input_binning_opt_config_dict["input"].get("directory", ".")
-    channels = input_binning_opt_config_dict["input"].get("channels", [])
+    # channels = input_binning_opt_config_dict["input"].get("channels", [])
     era = str(input_binning_opt_config_dict["input"].get("era", ""))
     output = input_binning_opt_config_dict["output"].get("directory", "")
     max_n_bins = input_binning_opt_config_dict["input"].get("max_n_optimized_bins", 20)
@@ -177,7 +177,12 @@ if __name__ == "__main__":
         category, poi = cat_entry.split(':')
         categories.append([category, poi])
     
-    for channel in channels:
-        optimize_channel(channel, output, era, categories, max_n_bins, params, binning_suggestions, verbose)
-        if verbose > 0:
-            print(f"Finished optimizing channel: {channel}")
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument('--channel', default="tauTau", type=str, help="channel to optimize")
+    args = parser.parse_args()
+    channel = args.channel
+    
+    optimize_channel(channel, output, era, categories, max_n_bins, params, binning_suggestions, verbose)
+    if verbose > 0:
+        print(f"Finished optimizing channel: {channel}")
