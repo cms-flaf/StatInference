@@ -12,7 +12,7 @@ import shutil
 import threading
 import time
 from sortedcontainers import SortedSet
-import distutils.util
+import setuptools._distutils.util
 
 import yaml
 input_binning_opt_config = os.path.join(os.environ["ANALYSIS_PATH"], "StatInference", "bin_opt", "bin_optimization.yaml")
@@ -595,7 +595,7 @@ if __name__ == '__main__':
         def_value = getattr(bkg_yields, name)
         def_value_type = type(def_value)
         if def_value_type == bool:
-            new_value = bool(distutils.util.strtobool(value))
+            new_value = bool(setuptools._distutils.util.strtobool(value))
         else:
             new_value = def_value_type(value)
         print("Setting {} = {}".format(name, new_value))
