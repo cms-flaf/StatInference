@@ -178,14 +178,14 @@ class DatacardMaker:
           for subp in process.subprocesses:
             hist_name = f"{channel}/{category}/{subp}"
             if unc_name and unc_scale:
-              hist_name += f"_{unc_name}{unc_scale}"
+              hist_name += f"_{unc_name}_{unc_scale}"
             subhist = file.Get(hist_name)
             if subhist == None:
               raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
             hists.append(self.hist_binner.applyBinning(era, channel, category, model_params, subhist))
         else:
           if unc_name and unc_scale:
-            hist_name += f"_{unc_name}{unc_scale}"
+            hist_name += f"_{unc_name}_{unc_scale}"
           hist = file.Get(hist_name)
           if hist == None:
             raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")

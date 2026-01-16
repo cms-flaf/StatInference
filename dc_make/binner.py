@@ -1,10 +1,12 @@
 import json
 from StatInference.common.tools import listToVector, rebinAndFill, importROOT
+import FLAF.Common.HistHelper as HistHelper
 ROOT = importROOT()
 
 class Binner:
     def __init__(self, hist_bins):
         self.hist_bins = []
+        self.linearize = False
         if type(hist_bins) == str:
             #Load json
             with open(hist_bins) as f:
@@ -15,8 +17,14 @@ class Binner:
             })
         elif hist_bins is not None:
             raise RuntimeError("Incompatible hist_bins format")
-        for entry in self.hist_bins:
-            entry['bins'] = listToVector(entry['bins'], 'double')
+        
+        # Loaded the string, now what is the object?
+        if type(self.hist_bins) == dict:
+            if "combined_bins" in self.hist_bins:
+                self.linearize = True
+        else: 
+            for entry in self.hist_bins:
+                entry['bins'] = listToVector(entry['bins'], 'double')
 
     def applyBinning(self, era, channel, category, model_params, hist):
         if len(self.hist_bins) == 0:
@@ -30,16 +38,18 @@ class Binner:
                 for param_key, param_value in model_params.items():
                     if not (param_key not in entry or param_value in entry[param_key]): return False
             return True
-
-        for entry in self.hist_bins:
-            # print(entry)
-            if entry_passes(entry): new_binning.append(entry['bins'])
-        if len(new_binning) <= 0:
-            raise RuntimeError(f"No binning found for era/channel/category/params {era}/{channel}/{category}/{model_params}")
-        if len(new_binning) >= 2:
-            raise RuntimeError(f"Multiple binnings found for era/channel/category/params {era}/{channel}/{category}/{model_params}")
-
-        new_hist = ROOT.TH1F(hist.GetName(), hist.GetTitle(), len(new_binning[0]) - 1,new_binning[0].data())
-        rebinAndFill(new_hist, hist)
+        
+        if self.linearize:
+            new_hist = HistHelper.RebinHisto(hist, self.hist_bins, hist.GetTitle())
+        else:
+            for entry in self.hist_bins:
+                # print(entry)
+                if entry_passes(entry): new_binning.append(entry['bins'])
+            if len(new_binning) <= 0:
+                raise RuntimeError(f"No binning found for era/channel/category/params {era}/{channel}/{category}/{model_params}")
+            if len(new_binning) >= 2:
+                raise RuntimeError(f"Multiple binnings found for era/channel/category/params {era}/{channel}/{category}/{model_params}")
+            new_hist = ROOT.TH1F(hist.GetName(), hist.GetTitle(), len(new_binning[0]) - 1,new_binning[0].data())
+            rebinAndFill(new_hist, hist)
         return new_hist
 
