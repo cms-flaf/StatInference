@@ -19,11 +19,10 @@ class Binner:
             raise RuntimeError("Incompatible hist_bins format")
         
         # Loaded the string, now what is the object?
-        if type(self.hist_bins) == dict:
-            if "combined_bins" in self.hist_bins:
+        for entry in self.hist_bins:
+            if "combined_bins" in entry:
                 self.linearize = True
-        else: 
-            for entry in self.hist_bins:
+            else:
                 entry['bins'] = listToVector(entry['bins'], 'double')
 
     def applyBinning(self, era, channel, category, model_params, hist):
@@ -40,7 +39,9 @@ class Binner:
             return True
         
         if self.linearize:
-            new_hist = HistHelper.RebinHisto(hist, self.hist_bins, hist.GetTitle())
+            for entry in self.hist_bins:
+                if entry_passes(entry): new_binning.append(entry)
+            new_hist = HistHelper.RebinHisto(hist, new_binning[0], hist.GetTitle())
         else:
             for entry in self.hist_bins:
                 # print(entry)
