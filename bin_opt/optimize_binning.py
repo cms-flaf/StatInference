@@ -12,7 +12,6 @@ import shutil
 import threading
 import time
 from sortedcontainers import SortedSet
-import distutils.util
 
 import yaml
 input_binning_opt_config = os.path.join(os.environ["ANALYSIS_PATH"], "StatInference", "bin_opt", "bin_optimization.yaml")
@@ -47,6 +46,20 @@ def HistToNumpy(hist):
 
 def arrayToStr(a):
     return '[ ' + ', '.join([ str(x) for x in a ]) + ' ]'
+
+def strtobool(val):
+    """Convert a string representation of truth to true (1) or false (0).
+    True values are 'y', 'yes', 't', 'true', 'on', and '1'; false values
+    are 'n', 'no', 'f', 'false', 'off', and '0'.  Raises ValueError if
+    'val' is anything else.
+    """
+    val = val.lower()
+    if val in ('y', 'yes', 't', 'true', 'on', '1'):
+        return 1
+    elif val in ('n', 'no', 'f', 'false', 'off', '0'):
+        return 0
+    else:
+        raise ValueError(f"invalid truth value '{val!r}'")
 
 class Yields:
     from sortedcontainers import SortedSet
@@ -595,7 +608,7 @@ if __name__ == '__main__':
         def_value = getattr(bkg_yields, name)
         def_value_type = type(def_value)
         if def_value_type == bool:
-            new_value = bool(distutils.util.strtobool(value))
+            new_value = bool(strtobool(value))
         else:
             new_value = def_value_type(value)
         print("Setting {} = {}".format(name, new_value))

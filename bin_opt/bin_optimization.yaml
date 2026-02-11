@@ -13,6 +13,7 @@ input:
   binning_suggestions: [] #[bin_opt/to_try.json]
   number_of_workers: 5
   worker_condor_max_runtime_hours: 72
+  multi_category_optimization: True
 
 output:
   directory: output_test/binning_run3_v4

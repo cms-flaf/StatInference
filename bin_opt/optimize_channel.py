@@ -98,11 +98,15 @@ def optimize_channel(channel, output, era, categories, max_n_bins, params, binni
     for cat_index in range(first_cat_index, len(categories)):
         category, poi = categories[cat_index]
         print(f"Optimizing {channel} {category} for era {era}")
+        datacards = []
+        shape_files = []
         for file in os.listdir(input_dir):
             if (channel in file or channel.lower() in file) and (category in file) and (era in file) and file.endswith('.txt'):
                 input_card = f'{input_dir}/{file}'
+                datacards.append(f'{input_dir}/{file}')
             if (channel in file or channel.lower() in file) and (category in file) and (era in file) and file.endswith('.root'):
                 input_shape = f'{input_dir}/{file}'
+                shape_files.append(f'{input_dir}/{file}')
             else:
                 continue
 
@@ -116,7 +120,10 @@ def optimize_channel(channel, output, era, categories, max_n_bins, params, binni
                 json.dump(suggested_binnings[category], f)
 
         cat_log = os.path.join(cat_dir, 'results.json')
-        opt_cmd = f"python3 bin_opt/optimize_binning.py --input {input_card}  --shape-file {input_shape} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
+        if input_binning_opt_config_dict["input"]["multi_category_optimization"]:
+            opt_cmd = f"python3 bin_opt/multi_optimize_binning.py --input {datacards}  --shape-file {shape_files} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
+        else:
+            opt_cmd = f"python3 bin_opt/optimize_binning.py --input {input_card}  --shape-file {input_shape} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
         if params is not None: 
             opt_cmd += f" --params {params} " 
         for cat_idx in range(cat_index):
