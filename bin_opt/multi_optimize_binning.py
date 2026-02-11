@@ -310,9 +310,10 @@ class MultiBayesianOptimization:
             point = self.suggest(utility_index)
 
             rel_thrs = np.zeros(len(point))
-            for k in range(self.max_n_bins):
-                rel_thrs[k] = point['rel_thr_{}'.format(k)]
-            self.print('rel_thrs: {}'.format(arrayToStr(rel_thrs)))
+            for idx in range(len(self.input_datacards)):
+                for k in range(self.max_n_bins):
+                    rel_thrs[k] = point[f'rel_thr_card{idx}_{k}']
+                self.print(f'rel_thrs: {arrayToStr(rel_thrs)}')
 
             binning = Binning.fromRelativeThresholds(rel_thrs, self.bkg_yields)
             equivalent_binning = self.findEquivalent(binning)
@@ -320,18 +321,18 @@ class MultiBayesianOptimization:
                 n = 0
                 open_request = self.findOpenRequest(binning)
                 if open_request is None:
-                    self.print('Next binning to probe: {}'.format(arrayToStr(binning.edges)))
+                    self.print(f'Next binning to probe: {arrayToStr(binning.edges)}')
                     self.input_queue.put(binning)
                     self.addOpenRequest(binning)
                     utility_index = 0
                     open_request_sleep = 1
                 else:
-                    self.print('Open request for binning found: {}'.format(arrayToStr(open_request.edges)))
+                    self.print(f'Open request for binning found: {arrayToStr(open_request.edges)}')
                     time.sleep(open_request_sleep)
                     open_request_sleep = open_request_sleep * 2
                     utility_index = (utility_index + 1) % len(self.utilities)
             else:
-                self.print('Equivalent binning found: {}'.format(arrayToStr(equivalent_binning.edges)))
+                self.print(f'Equivalent binning found: {arrayToStr(equivalent_binning.edges)}')
                 self.register(point, len(equivalent_binning.edges), equivalent_binning.exp_limit)
                 n += 1
                 if n >= 5:
@@ -355,7 +356,7 @@ class MultiBayesianOptimization:
                     if os.path.isfile(result_file):
                         with open(result_file, 'r') as f:
                             result = json.load(f)
-                        if result['input_datacard'] == self.input_datacard:
+                        if result['input_datacard'] in self.input_datacards.values():
                             binning = Binning.fromEntry(result)
                             self.clearOpenRequest(binning)
                             if self.findEquivalent(binning) is None:
@@ -371,12 +372,13 @@ class MultiBayesianOptimization:
                     try:
                         binning = self.input_queue.get(True, 1)
                         if binning is None: return
-                        task = {
-                            'input_datacard': self.input_datacard,
-                            'bin_edges': [ x for x in binning.edges ],
-                            'poi': self.poi,
-                            'other_datacards': self.other_datacards,
-                        }
+                        for card in self.input_datacards:
+                            task = {
+                                'input_datacard': card,
+                                'bin_edges': [ x for x in binning.edges ],
+                                'poi': self.poi,
+                                'other_datacards': self.other_datacards,
+                            }
                         with open(task_file_tmp, 'w') as f:
                             json.dump(task, f)
                         shutil.move(task_file_tmp, task_file)
