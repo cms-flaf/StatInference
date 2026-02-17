@@ -201,6 +201,9 @@ def optimize_binning(
 
         print(f"Total signal in y bins is {total_signal_y_slices}")
 
+        for bkg_name in bkg_names_main:
+            print(f"Total {bkg_name} in y bins is {np.sum(hists[bkg_name].values(), axis=0)}")
+
         signal_per_bin_y = total_signal / nBinsMaxY
 
         print(f"So we want {signal_per_bin_y} ({total_signal}/{nBinsMaxY})")
@@ -212,23 +215,54 @@ def optimize_binning(
 
         print(total_signal_y_slices[y_lower_limit : y_upper_limit + 1])
 
+        total_background_y_slices = np.zeros_like(total_signal_y_slices)
+        for bkg_name in bkg_names:
+            total_background_y_slices += np.sum(hists[bkg_name].values(), axis=0)
+
         y_edges = yaxis.edges()
         y_binning = set()
         y_binning_indexes = set()
         y_binning.add(y_edges[y_upper_limit])
         y_binning_indexes.add(int(y_upper_limit))
+
+        y_binning.add(y_edges[y_lower_limit])
+        y_binning_indexes.add(y_lower_limit)
+        
         current_upper_limit = y_upper_limit
         for low_y in range(y_upper_limit, y_lower_limit - 1, -1):
             if (
-                np.sum(total_signal_y_slices[low_y : current_upper_limit + 1])
+                np.sum(total_signal_y_slices[low_y : current_upper_limit])
                 >= signal_per_bin_y
+                and
+                np.sum(total_background_y_slices[low_y : current_upper_limit]) > 0
             ):
+                important_background_fail = False
+                print(f"Y bin edges are {y_edges[low_y]} to {y_edges[current_upper_limit]}, and total signal is {np.sum(total_signal_y_slices[low_y : current_upper_limit])}, and total background is {np.sum(total_background_y_slices[low_y : current_upper_limit])}")
+                for bkg_name in bkg_names_main:
+                    if (
+                        np.sum(hists[bkg_name].values()[:, low_y : current_upper_limit])
+                        <= 0
+                    ):
+                        print(
+                            f"Failed to add y bin {y_edges[low_y]} to {y_edges[current_upper_limit]} because important background {bkg_name} had zero entries"
+                        )
+                        important_background_fail = True
+                    print(f"Checking background {bkg_name} with {np.sum(hists[bkg_name].values()[:, low_y : current_upper_limit])} entries in this potential bin")
+                if important_background_fail:
+                    if low_y == y_lower_limit:
+                        print("Final bin actually failed, end here and break")
+                        y_binning.remove(y_edges[low_y])
+                        y_binning_indexes.remove(low_y)
+                    continue
                 current_upper_limit = low_y
                 y_binning.add(y_edges[low_y])
                 y_binning_indexes.add(low_y)
+            else:
+                if low_y == y_lower_limit:
+                    print("Hit lower limit, but also failed the signal/background requirement, so remove final bin and end")
+                    y_binning.remove(y_edges[low_y])
+                    y_binning_indexes.remove(low_y)
 
-        y_binning.add(y_edges[low_y])
-        y_binning_indexes.add(low_y)
         y_binning = sorted(y_binning)
         y_binning_indexes = sorted(y_binning_indexes)
 
@@ -255,7 +289,9 @@ def optimize_binning(
             print(
                 f"Or in indexes, {y_binning_indexes[y_index]} to {y_binning_indexes[y_index+1]}"
             )
-
+            print(f"Total signal in this y range is {np.sum(total_signal_y_slices[y_binning_indexes[y_index] : y_binning_indexes[y_index + 1]])}")
+            print(f"Total background in this y range is {np.sum(total_background_y_slices[y_binning_indexes[y_index] : y_binning_indexes[y_index + 1]])}")
+            
             # #Start the loop over nBins from 1 to nBinsMax
             signal_this_slice = np.sum(
                 total_signal_y_slices[
@@ -275,6 +311,7 @@ def optimize_binning(
                 x_binning = set()
                 x_binning.add(x_edges[x_max])
                 while not done:
+                    best_significance = 0
                     for left_edge in range(right_edge, -1, -1):
                         current_total_signal = integrate_uproot(
                             hists[signal_name],
@@ -294,36 +331,75 @@ def optimize_binning(
                                 y_binning_indexes[y_index + 1] - 1,
                             )[0]
 
-                        if current_total_signal >= bin_content_goal:
-                            print(
-                                f"Achieved bin content goal {current_total_signal} >= {bin_content_goal}, check if backgrounds are valid"
-                            )
-                            negative_flag = False
-                            for bkg_name in bkg_names_main:
-                                if (
-                                    integrate_uproot(
-                                        hists[bkg_name],
-                                        left_edge,
-                                        right_edge,
-                                        y_binning_indexes[y_index],
-                                        y_binning_indexes[y_index + 1] - 1,
-                                    )[0]
-                                    <= 0
-                                ):
-                                    # print(f"Failed, background {bkg_name} had zero or negative entries")
-                                    negative_flag = True
+                        significance_method = False
+                        if significance_method:
+                            current_significance = current_total_signal / (current_total_backgrounds ** 0.5)
 
-                            if negative_flag:
-                                if left_edge == 0:
-                                    done = True
-                                    # Don't add binning because we failed validation, just drop this low bin I guess
-                                continue
+                            if current_significance < best_significance:
+                                negative_flag = False
+                                for bkg_name in bkg_names_main:
+                                    if (
+                                        integrate_uproot(
+                                            hists[bkg_name],
+                                            left_edge,
+                                            right_edge,
+                                            y_binning_indexes[y_index],
+                                            y_binning_indexes[y_index + 1] - 1,
+                                        )[0]
+                                        <= 0
+                                    ):
+                                        # print(f"Failed, background {bkg_name} had zero or negative entries {integrate_uproot(hists[bkg_name], left_edge, right_edge, y_binning_indexes[y_index], y_binning_indexes[y_index + 1] - 1)[0]} in this potential bin")
+                                        negative_flag = True
 
-                            # print("Passed the validation, append to binning and move on")
-                            # I don't like having to round, but this is due to float64 != float32 (example 0.708)
-                            x_binning.add(round(x_edges[left_edge], 3))
-                            right_edge = left_edge - 1
-                            done = True
+                                if negative_flag:
+                                    if left_edge == 0:
+                                        print("Hit the left edge, but failed validation")
+                                        done = True
+                                        # Don't add binning because we failed validation, just drop this low bin I guess
+                                    continue
+
+                                print(f"Adding bin, total signal: {current_total_signal}, and total background {current_total_backgrounds}")
+                                print(f"So significance is {current_total_signal / (current_total_backgrounds ** 0.5)}")
+                                x_binning.add(round(x_edges[left_edge], 3))
+                                right_edge = left_edge - 1
+                                done = True
+
+                            best_significance = current_significance
+
+                        else:
+                            if current_total_signal >= bin_content_goal:
+                                # print(
+                                #     f"Achieved bin content goal {current_total_signal} >= {bin_content_goal}, check if backgrounds are valid"
+                                # )
+                                negative_flag = False
+                                for bkg_name in bkg_names_main:
+                                    if (
+                                        integrate_uproot(
+                                            hists[bkg_name],
+                                            left_edge,
+                                            right_edge,
+                                            y_binning_indexes[y_index],
+                                            y_binning_indexes[y_index + 1] - 1,
+                                        )[0]
+                                        <= 0
+                                    ):
+                                        # print(f"Failed, background {bkg_name} had zero or negative entries {integrate_uproot(hists[bkg_name], left_edge, right_edge, y_binning_indexes[y_index], y_binning_indexes[y_index + 1] - 1)[0]} in this potential bin")
+                                        negative_flag = True
+
+                                if negative_flag:
+                                    if left_edge == 0:
+                                        print("Hit the left edge, but failed validation")
+                                        done = True
+                                        # Don't add binning because we failed validation, just drop this low bin I guess
+                                    continue
+
+                                # print("Passed the validation, append to binning and move on")
+                                # I don't like having to round, but this is due to float64 != float32 (example 0.708)
+                                print(f"Adding bin, total signal: {current_total_signal}, and total background {current_total_backgrounds}")
+                                print(f"So significance is {current_total_signal / (current_total_backgrounds ** 0.5)}")
+                                x_binning.add(round(x_edges[left_edge], 3))
+                                right_edge = left_edge - 1
+                                done = True
 
                         if left_edge == 0:
                             done = True
@@ -347,51 +423,51 @@ def optimize_binning(
                 ) as f:
                     json.dump(json_dict, f, indent=4)
 
-                # Create the datacards
-                datacards_dir = os.path.join(outdir, f"tmp_datacards_{sig_string}")
-                binning_file = os.path.join(outdir, f"tmp_binning_{sig_string}.json")
+        # Create the datacards
+        datacards_dir = os.path.join(outdir, f"tmp_datacards_{sig_string}")
+        binning_file = os.path.join(outdir, f"tmp_binning_{sig_string}.json")
 
-                ps_call(
-                    f"python3 ../dc_make/create_datacards.py --input {shapes_dir} --output {datacards_dir} --config {config} --hist-bins ./{binning_file} --param_values {mass_list}",
-                    shell=True,
-                    env=cmssw_env,
-                )
-                # Find out where the limits will be saved
-                output = ps_call(
-                    f"law run MergeResonantLimits --version {tag} --datacards '{datacards_dir}/*.txt' --print-output 0,False",
-                    shell=True,
-                    catch_stdout=True,
-                    split="\n",
-                )[1]
-                limit_file_name = output[-2]
-                # Run the limit calculation
-                ps_call(
-                    f"law run MergeResonantLimits --version {tag} --datacards '{datacards_dir}/*.txt' --remove-output 3,a,y",
-                    shell=True,
-                )
+        ps_call(
+            f"python3 ../dc_make/create_datacards.py --input {shapes_dir} --output {datacards_dir} --config {config} --hist-bins ./{binning_file} --param_values {mass_list}",
+            shell=True,
+            env=cmssw_env,
+        )
+        # Find out where the limits will be saved
+        output = ps_call(
+            f"law run MergeResonantLimits --version {tag} --datacards '{datacards_dir}/*.txt' --print-output 0,False",
+            shell=True,
+            catch_stdout=True,
+            split="\n",
+        )[1]
+        limit_file_name = output[-2]
+        # Run the limit calculation
+        ps_call(
+            f"law run MergeResonantLimits --version {tag} --datacards '{datacards_dir}/*.txt' --remove-output 3,a,y",
+            shell=True,
+        )
 
-                # Now load the output numpy array and get value [1] (mass, val, up1, down1, up2, down2)
-                print(np.load(limit_file_name).files)
-                data = np.load(limit_file_name)
-                exp_limit = data[data.files[0]][0][1]
-                print(f"Limit was {exp_limit}")
+        # Now load the output numpy array and get value [1] (mass, val, up1, down1, up2, down2)
+        print(np.load(limit_file_name).files)
+        data = np.load(limit_file_name)
+        exp_limit = data[data.files[0]][0][1]
+        print(f"Limit was {exp_limit}")
 
-                limit_history[dict_key]["nBins"].append(nbins)
-                limit_history[dict_key]["limits"].append(exp_limit)
-                limit_list.append(exp_limit)
+        limit_history[dict_key]["nBins"].append(nbins)
+        limit_history[dict_key]["limits"].append(exp_limit)
+        limit_list.append(exp_limit)
 
-                # If adding a bin does not improve (limit stays the same) then just move on
-                if (exp_limit <= best_limit) or (nbins == 1):
-                    best_limit = exp_limit
-                    best_bins = bins_dict.copy()
+        # If adding a bin does not improve (limit stays the same) then just move on
+        if (exp_limit <= best_limit) or (nbins == 1):
+            best_limit = exp_limit
+            best_bins = bins_dict.copy()
 
-                else:
-                    print(
-                        f"Did not improve limits at nbins {nbins}, best limit was {best_limit}, and current was {exp_limit}"
-                    )
-                    # Need to replace the bin dict because it now has the 'worse' new binning
-                    bins_dict = best_bins.copy()
-                    break
+        else:
+            print(
+                f"Did not improve limits at nbins {nbins}, best limit was {best_limit}, and current was {exp_limit}"
+            )
+            # Need to replace the bin dict because it now has the 'worse' new binning
+            bins_dict = best_bins.copy()
+            break
 
     print("Finished the limit scan, lets look at the history")
     print(limit_history)
