@@ -21,6 +21,10 @@ if __name__ == "__main__":
   parser.add_argument('--config', required=True, type=str, help="configuration file")
   parser.add_argument('--hist-bins', required=False, type=str, default=None, help="bin edges to rebin histograms")
   parser.add_argument('--param_values', required=False, type=str, default=None, help="parameter values to run only certain masses")
+
+  for param in DatacardMaker.customizeble_parameters:
+    parser.add_argument(f'--{param}', required=False, type=str, default=None, help=f"custom value for {param}")
+
   args = parser.parse_args()
 
   if args.hist_bins is not None:
@@ -35,6 +39,7 @@ if __name__ == "__main__":
   else:
     param_values = None
 
-  maker = DatacardMaker(args.config, args.input, hist_bins=hist_bins, param_values=param_values)
-  maker.createDatacards(args.output)
+  kwargs = { param: getattr(args, param) for param in DatacardMaker.customizeble_parameters }
 
+  maker = DatacardMaker(args.config, args.input, hist_bins=hist_bins, param_values=param_values, **kwargs)
+  maker.createDatacards(args.output)
