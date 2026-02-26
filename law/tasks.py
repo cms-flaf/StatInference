@@ -1,6 +1,6 @@
 import law
+import luigi
 import os
-
 
 from FLAF.RunKit.run_tools import ps_call
 from FLAF.run_tools.law_customizations import (
@@ -11,9 +11,6 @@ from FLAF.run_tools.law_customizations import (
 from FLAF.Analysis.tasks import HistMergerTask, HistPlotTask
 from dhi.tasks.resonant import MergeResonantLimits
 
-
-# cmsEnv python3 StatInference/dc_make/create_datacards.py --input /builds/cms-flaf/flaf_integration/output/HH_bbWW/CI/Hists_merged/Run3_2023BPix/ --output CI_datacard --config config/Datacards/CI_card.yaml --hist-bins config/Datacards/CI_binning.json --param_values 300 &&
-# law run MergeResonantLimits --version dev --datacards 'CI_datacard/*.txt' --remove-output 3,a,y
 
 class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
     max_runtime = copy_param(HTCondorWorkflow.max_runtime, 2.0)
@@ -64,22 +61,31 @@ class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
                 cmd += ["--param_values", param_values_str]
             ps_call(cmd, env=self.cmssw_env, verbose=1)
 
-class ResonantLimitsAndHistPlotTask(Task, HTCondorWorkflow, law.LocalWorkflow):
-    def workflow_requires(self):
-        create_dc = CreateDatacardsTask.req(self, branches=())
-        create_dc_br0 = CreateDatacardsTask.req(self, branch=0, branches=())
-        output_dir = create_dc_br0.output().path
 
-        # import inference.dhi.tasks
-        limits = MergeResonantLimits(version=self.version, datacards=os.path.join(output_dir, "*.txt"))
-        plot = HistPlotTask.req(self, branches=())
-        return { "datacards": create_dc, "limits": limits, "plot": plot }
+class ResonantLimitsTask(Task):
+    workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
     def requires(self):
-        return []
+        return [ CreateDatacardsTask.req(self, branches=()) ]
 
-    def create_branch_map(self):
-        return { 0: None }
+    def output(self):
+        return self.local_target("dummy.txt")
+
+    def run(self):
+        create_dc_br0 = CreateDatacardsTask.req(self, branch=0, branches=())
+        output_dir = create_dc_br0.output().path
+        limits = yield MergeResonantLimits(version=self.version, datacards=os.path.join(output_dir, "*.txt"), workflow=self.workflow)
+        print(f"Merged limits: {limits}")
+        self.output().touch()
+
+
+class ResonantLimitsAndHistPlotTask(Task):
+    workflow = luigi.Parameter(default=law.parameter.NO_STR)
+    def requires(self):
+        return [
+            ResonantLimitsTask.req(self),
+            HistPlotTask.req(self),
+        ]
 
     def output(self):
         return self.local_target("dummy.txt")
