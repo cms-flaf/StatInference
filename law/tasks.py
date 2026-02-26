@@ -74,7 +74,7 @@ class ResonantLimitsTask(Task):
     def run(self):
         create_dc_br0 = CreateDatacardsTask.req(self, branch=0, branches=())
         output_dir = create_dc_br0.output().path
-        limits = yield MergeResonantLimits(version=self.version, datacards=os.path.join(output_dir, "*.txt"), workflow=self.workflow)
+        limits = yield MergeResonantLimits(version=self.version, datacards=os.path.join(output_dir, "*.txt"))
         print(f"Merged limits: {limits}")
         self.output().touch()
 
