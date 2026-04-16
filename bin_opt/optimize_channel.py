@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import yaml
+import math
 
 file_dir = os.path.dirname(os.path.abspath(__file__))
 pkg_dir = os.path.dirname(file_dir)
@@ -33,6 +34,29 @@ def sh_call(cmd, error_message, verbose=0):
     if returncode != 0:
         raise RuntimeError(error_message)
 
+def _total_bins_in_multicategory_entry(entry):
+    categories = entry.get("categories", [])
+    return sum(len(cat.get("bin_edges", [])) - 1 for cat in categories)
+
+def getBestMultiCategoryResult(log_file):
+    best = None
+    with open(log_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            if best is None:
+                best = entry
+                continue
+            if entry['exp_limit'] != best['exp_limit']:
+                if entry['exp_limit'] < best['exp_limit']:
+                    best = entry
+            else:
+                if _total_bins_in_multicategory_entry(entry) < _total_bins_in_multicategory_entry(best):
+                    best = entry
+    return best
+
 def compare_binnings(b1, b2):
     if b2 is None: return True
     if b1['exp_limit'] != b2['exp_limit']: return b1['exp_limit'] < b2['exp_limit']
@@ -49,6 +73,26 @@ def getBestBinning(log_file):
         if compare_binnings(binning, best_binning):
             best_binning = binning
     return best_binning
+
+def inputs_for_category(input_dir, channel, category, era):
+    cards = []
+    shapes = []
+    for file in os.listdir(input_dir):
+        if not ((channel in file or channel.lower() in file) and (category in file) and (era in file)):
+            continue
+        if file.endswith(".txt"):
+            cards.append(os.path.join(input_dir, file))
+        elif file.endswith(".root"):
+            shapes.append(os.path.join(input_dir, file))
+    if len(cards) != 1:
+        raise RuntimeError(
+            f"Expected exactly 1 datacard for channel={channel}, category={category}, era={era}, found {len(cards)}: {cards}"
+        )
+    if len(shapes) != 1:
+        raise RuntimeError(
+            f"Expected exactly 1 shape file for channel={channel}, category={category}, era={era}, found {len(shapes)}: {shapes}"
+        )
+    return os.path.abspath(cards[0]), os.path.abspath(shapes[0])
 
 def optimize_channel(channel, output, era, categories, max_n_bins, params, binning_suggestions, verbose):
     output_dir = os.path.join(output, channel+'_'+era)
@@ -95,14 +139,128 @@ def optimize_channel(channel, output, era, categories, max_n_bins, params, binni
     while first_cat_index < len(categories) and categories[first_cat_index][0] in best_binnings[channel+'_'+f"{era}"]:
         first_cat_index += 1
 
+    if input_binning_opt_config_dict["input"]["multi_category_optimization"]:
+        remaining = categories[first_cat_index:]
+        if len(remaining) == 0:
+            print(f"Nothing to do: all categories already optimized for {channel}_{era}")
+            return
+
+        pois = sorted(set([poi for (_cat, poi) in remaining]))
+        if len(pois) != 1:
+            raise RuntimeError(f"Simultaneous multi-category optimization requires a single shared POI across the bundle. Found POIs: {pois}")
+        poi = pois[0]
+
+        bundle_categories = [cat for (cat, _poi) in remaining]
+        datacards = []
+        shape_files = []
+        cat_inputs = {}
+        for category in bundle_categories:
+            card, shape = inputs_for_category(input_dir, channel, category, era)
+            datacards.append(card)
+            shape_files.append(shape)
+            cat_inputs[category] = (card, shape)
+
+        bundle_name = "multicat_" + "_".join(bundle_categories)
+        bundle_dir = os.path.join(output_dir, bundle_name)
+        os.makedirs(bundle_dir, exist_ok=True)
+
+        input_arg = ",".join(datacards)
+        shape_arg = ",".join(shape_files)
+        opt_cmd = (
+            f"python3 bin_opt/multi_optimize_binning.py "
+            f"--input {input_arg} "
+            f"--shape-file {shape_arg} "
+            f"--output {bundle_dir} "
+            f"--workers-dir {workers_dir} "
+            f"--max_n_bins {max_n_bins} "
+            f"--poi {poi}"
+        )
+        if params is not None:
+            opt_cmd += f" --params {params} "
+
+        ps_call(opt_cmd, shell=True, env=None, verbose=verbose)
+
+        multicat_log = os.path.join(bundle_dir, "results_multibinning.json")
+        if not os.path.isfile(multicat_log):
+            raise RuntimeError(f"Multi-category log file not found: {multicat_log}")
+
+        best_entry = getBestMultiCategoryResult(multicat_log)
+        if best_entry is None:
+            raise RuntimeError(f"Unable to find best multi-category result in {multicat_log}")
+
+        combined_exp_limit = best_entry["exp_limit"]
+
+        cats_sorted = sorted(best_entry["categories"], key=lambda x: int(x["cat_id"]))
+        if len(cats_sorted) != len(bundle_categories):
+            raise RuntimeError(
+                "Mismatch between optimized categories and result categories: "
+                f"{len(bundle_categories)} vs {len(cats_sorted)}"
+            )
+
+        for idx, (category, _poi) in enumerate(remaining):
+            cat_result = cats_sorted[idx]
+            bin_edges = cat_result["bin_edges"]
+
+            input_card, _input_shape = cat_inputs[category]
+
+            cat_best = {
+                "bin_edges": bin_edges,
+                "exp_limit": combined_exp_limit,  # combined objective
+                "poi": poi,
+                "mode": "simultaneous_multicat",
+                "multicat_categories": bundle_categories,
+            }
+            best_binnings[channel + "_" + era][category] = cat_best
+
+            bin_edges_str = ", ".join([str(edge) for edge in bin_edges])
+            rebin_cmd = (
+                f'python3 bin_opt/rebinAndRunLimits.py '
+                f'--input {input_card} '
+                f'--output {best_dir} '
+                f'--bin-edges "{bin_edges_str}" '
+                f'--rebin-only '
+            )
+            ps_call(rebin_cmd, shell=True, env=None, verbose=verbose)
+
+        best_binnings_file = os.path.join(output_dir, "best.json")
+        with open(best_binnings_file, "w") as f:
+            f.write('{{\n\t"{}": {{\n'.format(channel + "_" + era))
+
+            first_written = True
+            for i, (category, _poi) in enumerate(categories):
+                if category not in best_binnings[channel + "_" + era]:
+                    continue
+                if not first_written:
+                    f.write(",\n")
+                first_written = False
+                f.write('\t\t "{}": '.format(category))
+                json.dump(best_binnings[channel + "_" + era][category], f)
+            if first_written:
+                f.write("\t}\n}\n")
+            else:
+                f.write("\n\t}\n}\n")
+
+        final_binning_file = output_dir + ".json"
+        shutil.copy(best_binnings_file, final_binning_file)
+        print(
+            "Binning for {} has been successfully optimised (simultaneous multi-category). "
+            "The results can be found in {}".format(channel + "_" + era, final_binning_file)
+        )
+        return
+
+
     for cat_index in range(first_cat_index, len(categories)):
         category, poi = categories[cat_index]
         print(f"Optimizing {channel} {category} for era {era}")
+        datacards = []
+        shape_files = []
         for file in os.listdir(input_dir):
             if (channel in file or channel.lower() in file) and (category in file) and (era in file) and file.endswith('.txt'):
                 input_card = f'{input_dir}/{file}'
+                datacards.append(f'{input_dir}/{file}')
             if (channel in file or channel.lower() in file) and (category in file) and (era in file) and file.endswith('.root'):
                 input_shape = f'{input_dir}/{file}'
+                shape_files.append(f'{input_dir}/{file}')
             else:
                 continue
 
@@ -116,7 +274,15 @@ def optimize_channel(channel, output, era, categories, max_n_bins, params, binni
                 json.dump(suggested_binnings[category], f)
 
         cat_log = os.path.join(cat_dir, 'results.json')
-        opt_cmd = f"python3 bin_opt/optimize_binning.py --input {input_card}  --shape-file {input_shape} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
+        if input_binning_opt_config_dict["input"]["multi_category_optimization"]:
+            input_arg = ",".join([os.path.abspath(p) for p in datacards])
+            shape_arg = ",".join([os.path.abspath(p) for p in shape_files])
+            if input_arg == "" or shape_arg == "":
+                raise RuntimeError("No datacards or shape files found in input directory")
+            opt_cmd = f"python3 bin_opt/multi_optimize_binning.py --input {input_arg} --shape-file {shape_arg} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
+
+        else:
+            opt_cmd = f"python3 bin_opt/optimize_binning.py --input {input_card}  --shape-file {input_shape} --output {cat_dir} --workers-dir {workers_dir} --max_n_bins {max_n_bins} --poi {poi}"
         if params is not None: 
             opt_cmd += f" --params {params} " 
         for cat_idx in range(cat_index):
