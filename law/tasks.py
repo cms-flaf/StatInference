@@ -46,9 +46,9 @@ class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
                 "python3",
                 create_datacards_py,
                 "--input",
-                base_dir_local.path,
+                base_dir_local.abspath,
                 "--output",
-                self.output().path,
+                self.output().abspath,
                 "--config",
                 config,
                 "--hist-bins",
@@ -73,7 +73,7 @@ class ResonantLimitsTask(Task):
 
     def run(self):
         create_dc_br0 = CreateDatacardsTask.req(self, branch=0, branches=())
-        output_dir = create_dc_br0.output().path
+        output_dir = create_dc_br0.output().abspath
         limits = yield MergeResonantLimits(version=self.version, datacards=os.path.join(output_dir, "*.txt"))
         print(f"Merged limits: {limits}")
         self.output().touch()
