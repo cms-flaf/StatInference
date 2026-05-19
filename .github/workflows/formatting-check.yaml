@@ -1,0 +1,14 @@
+name: Formatting Check
+
+on:
+  pull_request:
+    types: [ "opened", "synchronize", "reopened", "labeled" ]
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  formatting-check:
+    uses: cms-flaf/FLAF/.github/workflows/formatting-check.yaml@main
+    secrets: inherit
