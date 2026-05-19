@@ -1,0 +1,14 @@
+name: Trigger the FLAF integration pipeline
+
+on:
+  issue_comment:
+    types: [ "created", "edited" ]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  process-trigger-request:
+    uses: cms-flaf/FLAF/.github/workflows/trigger-flaf-integration.yaml@main
+    secrets: inherit
