@@ -18,6 +18,7 @@ from .uncertainty import (
     UncertaintyType,
     UncertaintyScale,
     MultiValueLnNUncertainty,
+    LnNUncertainty,
     ShapeUncertainty,
 )
 from .model import Model
@@ -57,22 +58,7 @@ class DatacardMaker:
         self.categories = cfg["categories"]
         self.signalFractionForRelevantBins = cfg["signalFractionForRelevantBins"]
 
-        # Load era groups if defined (e.g., Early_Run3 combining multiple eras)
         self.era_groups = cfg.get("era_groups", {})
-        # Create reverse mapping: sub_era -> meta_era
-        self.era_to_group = {}
-        for group_name, sub_eras in self.era_groups.items():
-            for sub_era in sub_eras:
-                if sub_era not in self.era_to_group:
-                    self.era_to_group[sub_era] = []
-                self.era_to_group[sub_era].append(group_name)
-
-        # Expand eras to include both regular eras and meta-eras
-        all_eras = list(self.eras)
-        for group_name in self.era_groups.keys():
-            if group_name not in all_eras:
-                all_eras.append(group_name)
-        self.all_eras = all_eras
 
         self.bins = []
         for era, channel, cat in self.ECC():
@@ -162,7 +148,7 @@ class DatacardMaker:
     def getSubEras(self, era):
         """Get sub-eras for a given era. If era is a meta-era, return its sub-eras.
         Otherwise return [era]."""
-        if era in self.era_groups:
+        if self.isMetaEra(era):
             return self.era_groups[era]
         return [era]
 
@@ -175,18 +161,14 @@ class DatacardMaker:
         return self.cb.cp().mass([param_str]).process([process]).bin([bin_name])
 
     def ECC(self):
-        return itertools.product(self.all_eras, self.channels, self.categories)
+        return itertools.product(self.eras, self.channels, self.categories)
 
     def PPECC(self):
         param_bins = list(self.param_bins.keys())
         if not self.model.param_dependent_bkg:
             param_bins.append("*")
         return itertools.product(
-            self.processes.keys(),
-            param_bins,
-            self.all_eras,
-            self.channels,
-            self.categories,
+            self.processes.keys(), param_bins, self.eras, self.channels, self.categories
         )
 
     def getInputFile(self, era, model_params):
@@ -233,62 +215,49 @@ class DatacardMaker:
     def _getSubEraLnNVariedShapes(
         self, unc, process, sub_era, channel, category, model_params
     ):
-        if process.subprocesses and isinstance(unc, MultiValueLnNUncertainty):
-            file_name, file = self.getInputFile(sub_era, model_params)
-            up_hist = None
-            down_hist = None
-            applies = False
-
-            for subp in process.subprocesses:
-                hist = self._loadBinnedHist(
-                    file,
-                    sub_era,
-                    channel,
-                    category,
-                    model_params,
-                    f"{channel}/{category}/{subp}",
-                )
-                unc_value = self._getLnNValue(
-                    unc, process, subp, sub_era, channel, category
-                )
-                if unc_value is not None:
-                    applies = True
-                    sub_up = self._applyLnNToHist(hist, unc_value, UncertaintyScale.Up)
-                    sub_down = self._applyLnNToHist(
-                        hist, unc_value, UncertaintyScale.Down
-                    )
-                else:
-                    sub_up = hist.Clone()
-                    sub_down = hist.Clone()
-                    sub_up.SetDirectory(0)
-                    sub_down.SetDirectory(0)
-
-                if up_hist is None:
-                    up_hist = sub_up
-                    down_hist = sub_down
-                else:
-                    up_hist.Add(sub_up)
-                    down_hist.Add(sub_down)
-
-            if process.scale != 1:
-                up_hist.Scale(process.scale)
-                down_hist.Scale(process.scale)
-            return up_hist, down_hist, applies
-
-        nominal_sub = self.getShape(process, sub_era, channel, category, model_params)
-        unc_value = self._getLnNValue(
-            unc, process, process.name, sub_era, channel, category
+        file_name, file = self.getInputFile(sub_era, model_params)
+        hist_names = (
+            [(subp, subp) for subp in process.subprocesses]
+            if process.subprocesses
+            else [(process.hist_name, process.name)]
         )
-        if unc_value is None:
-            up_hist = nominal_sub.Clone()
-            down_hist = nominal_sub.Clone()
-            up_hist.SetDirectory(0)
-            down_hist.SetDirectory(0)
-            return up_hist, down_hist, False
+        up_hist = None
+        down_hist = None
+        applies = False
 
-        up_hist = self._applyLnNToHist(nominal_sub, unc_value, UncertaintyScale.Up)
-        down_hist = self._applyLnNToHist(nominal_sub, unc_value, UncertaintyScale.Down)
-        return up_hist, down_hist, True
+        for hist_name_suffix, proc_name_for_unc in hist_names:
+            hist = self._loadBinnedHist(
+                file,
+                sub_era,
+                channel,
+                category,
+                model_params,
+                f"{channel}/{category}/{hist_name_suffix}",
+            )
+            unc_value = self._getLnNValue(
+                unc, process, proc_name_for_unc, sub_era, channel, category
+            )
+            if unc_value is not None:
+                applies = True
+                sub_up = self._applyLnNToHist(hist, unc_value, UncertaintyScale.Up)
+                sub_down = self._applyLnNToHist(hist, unc_value, UncertaintyScale.Down)
+            else:
+                sub_up = hist.Clone()
+                sub_down = hist.Clone()
+                sub_up.SetDirectory(0)
+                sub_down.SetDirectory(0)
+
+            if up_hist is None:
+                up_hist = sub_up
+                down_hist = sub_down
+            else:
+                up_hist.Add(sub_up)
+                down_hist.Add(sub_down)
+
+        if process.scale != 1:
+            up_hist.Scale(process.scale)
+            down_hist.Scale(process.scale)
+        return up_hist, down_hist, applies
 
     def getMetaEraLnNShapeUnc(self, unc, process, era, channel, category, model_params):
         if not self.isMetaEra(era):
@@ -587,7 +556,6 @@ class DatacardMaker:
 
             def setShape(p):
                 nonlocal shape_set
-                print(f"Setting shape for {p}")
                 if shape_set:
                     raise RuntimeError("Shape already set")
                 p.set_shape(shape, True)
@@ -851,17 +819,6 @@ class DatacardMaker:
                     tmp_dc_file = os.path.join(tmp_output, f"datacard_{proc_name}.txt")
                     tmp_shape_file = shape_file
                     self.cb.cp().era([subera]).channel([subchannel]).mass(
-                        param_list
-                    ).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
-
-            # Also write datacards for meta-eras
-            for meta_era in self.era_groups.keys():
-                for subchannel in self.channels:
-                    tmp_output = os.path.join(output, meta_era, subchannel)
-                    os.makedirs(tmp_output, exist_ok=True)
-                    tmp_dc_file = os.path.join(tmp_output, f"datacard_{proc_name}.txt")
-                    tmp_shape_file = shape_file
-                    self.cb.cp().era([meta_era]).channel([subchannel]).mass(
                         param_list
                     ).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
 
