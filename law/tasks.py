@@ -65,6 +65,9 @@ class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
 class ResonantLimitsTask(Task):
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
+    def store_parts(self):
+        return (self.version, self.__class__.__name__, "combined")
+
     def get_eras(self):
         statInf_entry = self.global_params["StatInference"]
         config = os.path.join(self.ana_path(), statInf_entry["config"])
@@ -77,8 +80,6 @@ class ResonantLimitsTask(Task):
         return [ CreateDatacardsTask.req(self, period=e, branches=()) for e in self.get_eras() ]
 
     def output(self):
-        # By default the period will be set to 'combined' in ResonantLimitsAndHistPlotTask
-        # so this will map to data/CI/ResonantLimitsTask/combined/...
         return {
             "limits": self.local_target("limits.npz"),
             "datacards": law.LocalDirectoryTarget(os.path.join(self.ana_data_path(), self.version, "Datacards", "combined"))
@@ -142,7 +143,7 @@ class ResonantLimitsAndHistPlotTask(Task):
         return data.get("eras", [self.period])
 
     def requires(self):
-        reqs = [ ResonantLimitsTask.req(self, period="combined") ]
+        reqs = [ ResonantLimitsTask.req(self) ]
         for e in self.get_eras():
             reqs.append(HistPlotTask.req(self, period=e))
         return reqs
