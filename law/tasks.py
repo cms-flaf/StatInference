@@ -125,10 +125,11 @@ class ResonantLimitsTask(Task):
                         break
             
             if combine_args:
+                import subprocess
                 cmd = ["combineCards.py"] + combine_args
                 out_file = os.path.join(out_dc_dir.path, f"combined_{mass}.txt")
                 with open(out_file, "w") as f:
-                    ps_call(cmd, env=self.cmssw_env, stdout=f)
+                    subprocess.run(cmd, env=self.cmssw_env, stdout=f, check=True)
 
 
 class ResonantLimitsAndHistPlotTask(Task):
