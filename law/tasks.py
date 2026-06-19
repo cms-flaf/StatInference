@@ -65,27 +65,48 @@ class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
 class ResonantLimitsTask(Task):
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
+    def get_eras(self):
+        statInf_entry = self.global_params["StatInference"]
+        config = os.path.join(self.ana_path(), statInf_entry["config"])
+        import yaml
+        with open(config, "r") as f:
+            data = yaml.safe_load(f)
+        return data.get("eras", [self.period])
+
     def requires(self):
-        return [ CreateDatacardsTask.req(self, branches=()) ]
+        return [ CreateDatacardsTask.req(self, period=e, branches=()) for e in self.get_eras() ]
 
     def output(self):
         return self.local_target("dummy.txt")
 
     def run(self):
-        create_dc_br0 = CreateDatacardsTask.req(self, branch=0, branches=())
-        output_dir = create_dc_br0.output().abspath
-        limits = yield MergeResonantLimits(version=self.version, datacards=os.path.join(output_dir, "*.txt"))
+        datacards = []
+        for e in self.get_eras():
+            create_dc_br0 = CreateDatacardsTask.req(self, period=e, branch=0, branches=())
+            output_dir = create_dc_br0.output().abspath
+            datacards.append(os.path.join(output_dir, "*.txt"))
+
+        limits = yield MergeResonantLimits(version=self.version, datacards=tuple(datacards))
         print(f"Merged limits: {limits}")
         self.output().touch()
 
 
 class ResonantLimitsAndHistPlotTask(Task):
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
+    
+    def get_eras(self):
+        statInf_entry = self.global_params["StatInference"]
+        config = os.path.join(self.ana_path(), statInf_entry["config"])
+        import yaml
+        with open(config, "r") as f:
+            data = yaml.safe_load(f)
+        return data.get("eras", [self.period])
+
     def requires(self):
-        return [
-            ResonantLimitsTask.req(self),
-            HistPlotTask.req(self),
-        ]
+        reqs = [ ResonantLimitsTask.req(self) ]
+        for e in self.get_eras():
+            reqs.append(HistPlotTask.req(self, period=e))
+        return reqs
 
     def output(self):
         return self.local_target("dummy.txt")
