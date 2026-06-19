@@ -77,18 +77,57 @@ class ResonantLimitsTask(Task):
         return [ CreateDatacardsTask.req(self, period=e, branches=()) for e in self.get_eras() ]
 
     def output(self):
-        return self.local_target("dummy.txt")
+        # By default the period will be set to 'combined' in ResonantLimitsAndHistPlotTask
+        # so this will map to data/CI/ResonantLimitsTask/combined/...
+        return {
+            "limits": self.local_target("limits.npz"),
+            "datacards": law.LocalDirectoryTarget(os.path.join(self.ana_data_path(), self.version, "Datacards", "combined"))
+        }
 
     def run(self):
         datacards = []
-        for e in self.get_eras():
+        eras = self.get_eras()
+        era_cards = {}
+        import glob
+        import re
+        
+        for e in eras:
             create_dc_br0 = CreateDatacardsTask.req(self, period=e, branch=0, branches=())
             output_dir = create_dc_br0.output().abspath
-            datacards.append(os.path.join(output_dir, "*.txt"))
+            cards = glob.glob(os.path.join(output_dir, "*.txt"))
+            era_cards[e] = cards
+            datacards.extend(cards)
 
         limits = yield MergeResonantLimits(version=self.version, datacards=tuple(datacards))
         print(f"Merged limits: {limits}")
-        self.output().touch()
+        
+        import shutil
+        self.output()["limits"].parent.touch()
+        shutil.copy2(limits.path, self.output()["limits"].path)
+        
+        out_dc_dir = self.output()["datacards"]
+        out_dc_dir.touch()
+        
+        masses = set()
+        for e, cards in era_cards.items():
+            for c in cards:
+                m = re.search(r'_(\d+)\.txt$', c)
+                if m:
+                    masses.add(m.group(1))
+                    
+        for mass in masses:
+            combine_args = []
+            for e in eras:
+                for c in era_cards[e]:
+                    if c.endswith(f"_{mass}.txt"):
+                        combine_args.append(f"{e}={c}")
+                        break
+            
+            if combine_args:
+                cmd = ["combineCards.py"] + combine_args
+                out_file = os.path.join(out_dc_dir.path, f"combined_{mass}.txt")
+                with open(out_file, "w") as f:
+                    ps_call(cmd, env=self.cmssw_env, stdout=f)
 
 
 class ResonantLimitsAndHistPlotTask(Task):
@@ -103,7 +142,7 @@ class ResonantLimitsAndHistPlotTask(Task):
         return data.get("eras", [self.period])
 
     def requires(self):
-        reqs = [ ResonantLimitsTask.req(self) ]
+        reqs = [ ResonantLimitsTask.req(self, period="combined") ]
         for e in self.get_eras():
             reqs.append(HistPlotTask.req(self, period=e))
         return reqs
