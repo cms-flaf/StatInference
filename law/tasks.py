@@ -17,7 +17,7 @@ class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
     n_cpus = copy_param(HTCondorWorkflow.n_cpus, 1)
 
     def workflow_requires(self):
-        return { "HistMerger": HistMergerTask.req(self, branches=()) }
+        return {"HistMerger": HistMergerTask.req(self, branches=())}
 
     def requires(self):
         merge_map = HistMergerTask.req(self, branch=-1, branches=()).create_branch_map()
@@ -28,10 +28,12 @@ class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
         ]
 
     def create_branch_map(self):
-        return { 0: None }
+        return {0: None}
 
     def output(self):
-        path = os.path.join(self.ana_data_path(), self.version, "Datacards", self.period)
+        path = os.path.join(
+            self.ana_data_path(), self.version, "Datacards", self.period
+        )
         return law.LocalDirectoryTarget(path)
 
     def run(self):
@@ -39,7 +41,9 @@ class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
         config = os.path.join(self.ana_path(), statInf_entry["config"])
         hist_bins = os.path.join(self.ana_path(), statInf_entry["hist_bins"])
         param_values = statInf_entry.get("param_values", [])
-        create_datacards_py = os.path.join(self.ana_path(), "StatInference", "dc_make", "create_datacards.py")
+        create_datacards_py = os.path.join(
+            self.ana_path(), "StatInference", "dc_make", "create_datacards.py"
+        )
         base_input_dir_remote = self.input()[0].parent.parent.parent
         with base_input_dir_remote.localize("r") as base_dir_local:
             cmd = [
@@ -65,27 +69,104 @@ class CreateDatacardsTask(Task, HTCondorWorkflow, law.LocalWorkflow):
 class ResonantLimitsTask(Task):
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
+    def store_parts(self):
+        return (self.version, self.__class__.__name__, "combined")
+
+    def get_eras(self):
+        statInf_entry = self.global_params["StatInference"]
+        config = os.path.join(self.ana_path(), statInf_entry["config"])
+        import yaml
+
+        with open(config, "r") as f:
+            data = yaml.safe_load(f)
+        return data.get("eras", [self.period])
+
     def requires(self):
-        return [ CreateDatacardsTask.req(self, branches=()) ]
+        return [
+            CreateDatacardsTask.req(self, period=e, branches=())
+            for e in self.get_eras()
+        ]
 
     def output(self):
-        return self.local_target("dummy.txt")
+        return {
+            "limits": self.local_target("limits.npz"),
+            "datacards": law.LocalDirectoryTarget(
+                os.path.join(
+                    self.ana_data_path(), self.version, "Datacards", "combined"
+                )
+            ),
+        }
 
     def run(self):
-        create_dc_br0 = CreateDatacardsTask.req(self, branch=0, branches=())
-        output_dir = create_dc_br0.output().abspath
-        limits = yield MergeResonantLimits(version=self.version, datacards=os.path.join(output_dir, "*.txt"))
+        datacards = []
+        eras = self.get_eras()
+        era_cards = {}
+        import glob
+        import re
+
+        for e in eras:
+            create_dc_br0 = CreateDatacardsTask.req(
+                self, period=e, branch=0, branches=()
+            )
+            output_dir = create_dc_br0.output().abspath
+            cards = glob.glob(os.path.join(output_dir, "*.txt"))
+            era_cards[e] = cards
+            datacards.extend(cards)
+
+        limits = yield MergeResonantLimits(
+            version=self.version, datacards=tuple(datacards)
+        )
         print(f"Merged limits: {limits}")
-        self.output().touch()
+
+        import shutil
+
+        self.output()["limits"].parent.touch()
+        shutil.copy2(limits.path, self.output()["limits"].path)
+
+        out_dc_dir = self.output()["datacards"]
+        out_dc_dir.touch()
+
+        masses = set()
+        for e, cards in era_cards.items():
+            for c in cards:
+                m = re.search(r"_(\d+)\.txt$", c)
+                if m:
+                    masses.add(m.group(1))
+
+        for mass in masses:
+            combine_args = []
+            for e in eras:
+                for c in era_cards[e]:
+                    if c.endswith(f"_{mass}.txt"):
+                        combine_args.append(f"{e}={c}")
+                        break
+
+            if combine_args:
+                import subprocess
+
+                cmd = ["combineCards.py"] + combine_args
+                out_file = os.path.join(out_dc_dir.path, f"combined_{mass}.txt")
+                with open(out_file, "w") as f:
+                    subprocess.run(cmd, env=self.cmssw_env, stdout=f, check=True)
 
 
 class ResonantLimitsAndHistPlotTask(Task):
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
+
+    def get_eras(self):
+        statInf_entry = self.global_params["StatInference"]
+        config = os.path.join(self.ana_path(), statInf_entry["config"])
+        import yaml
+
+        with open(config, "r") as f:
+            data = yaml.safe_load(f)
+        return data.get("eras", [self.period])
+
     def requires(self):
-        return [
-            ResonantLimitsTask.req(self),
-            HistPlotTask.req(self),
-        ]
+        reqs = [ResonantLimitsTask.req(self)]
+        for e in self.get_eras():
+            reqs.append(HistPlotTask.req(self, period=e))
+        return reqs
 
     def output(self):
         return self.local_target("dummy.txt")
