@@ -11,6 +11,7 @@ from StatInference.common.tools import (
     importROOT,
     resolveNegativeBins,
     getRelevantBins,
+    CategoryNaming,
 )
 from .process import Process
 from .uncertainty import (
@@ -18,6 +19,8 @@ from .uncertainty import (
     UncertaintyType,
     UncertaintyScale,
     MultiValueLnNUncertainty,
+    LnNUncertainty,
+    ShapeUncertainty,
 )
 from .model import Model
 from .binner import Binner
@@ -29,7 +32,14 @@ class DatacardMaker:
     customizeble_parameters = ["eras", "channels", "categories"]
 
     def __init__(
-        self, cfg_file, input_path, hist_bins=None, param_values=None, **kwargs
+        self,
+        cfg_file,
+        input_path,
+        hist_bins=None,
+        param_values=None,
+        n_dnn_slices=None,
+        category_pattern=None,
+        **kwargs,
     ):
         self.cb = CombineHarvester()
 
@@ -53,8 +63,34 @@ class DatacardMaker:
         self.analysis = cfg["analysis"]
         self.eras = cfg["eras"]
         self.channels = cfg["channels"]
-        self.categories = cfg["categories"]
+        # For input produced by HistRebinTask the configuration lists base categories
+        # ("SR/res2b") while the datacard bins are the per-DNN-slice names it wrote.
+        # n_dnn_slices comes from the caller when given -- HistRebinTask's resolved value
+        # is authoritative, since a command-line override would otherwise leave this
+        # deriving a different slice count than the rebinned files contain.
+        #
+        # No slice count anywhere (no `binning:` block and no caller value) means the
+        # input did not come from HistRebinTask -- it is already binned, and its
+        # categories are exactly the ones the configuration lists. An explicit 0 says the
+        # same for a configuration that does carry a `binning:` block.
+        n_slices = n_dnn_slices
+        if n_slices is None:
+            n_slices = (cfg.get("binning") or {}).get("n_dnn_slices")
+        # Same rule for the pattern that names those slices: the caller's resolved value
+        # wins, otherwise the configuration's own.
+        self.naming = (
+            CategoryNaming(category_pattern)
+            if category_pattern
+            else CategoryNaming.fromConfig(cfg)
+        )
+        self.categories = (
+            self.naming.expand(cfg["categories"], int(n_slices))
+            if n_slices
+            else list(cfg["categories"])
+        )
         self.signalFractionForRelevantBins = cfg["signalFractionForRelevantBins"]
+
+        self.era_groups = cfg.get("era_groups", {})
 
         self.bins = []
         for era, channel, cat in self.ECC():
@@ -127,6 +163,7 @@ class DatacardMaker:
         # print(f"Using hist_bins: {self.hist_binner.hist_bins}")
 
         self.input_files = {}
+        self._merged_away = {}
         self.shapes = {}
         self.signal_hists_by_key = {}
 
@@ -141,12 +178,72 @@ class DatacardMaker:
             return index
         return (index, name)
 
+    def mergedAwayIn(self, channel, category):
+        """Process names absorbed by an active merged process in this bin.
+
+        A process declared with `subprocesses` that name other *datacard* processes
+        replaces them wherever it applies -- see MinorBkg in the bbWW DL config,
+        which merges DY/ST/VV in the boosted slices where DY alone has no usable MC
+        statistics. Suppressing the constituents here is what stops the merge from
+        double counting, and it means they keep their own configuration unchanged
+        instead of needing a mirror-image category list to carve the merged bins
+        back out.
+
+        Inert for every existing configuration: the `subprocesses` lists in
+        x_hh_bbtautau_run2.yaml name sample-level histograms (WW, WZ, ZZ ...), none
+        of which is a datacard process, so nothing is ever absorbed there.
+        """
+        key = (channel, category)
+        if key not in self._merged_away:
+            absorbed = set()
+            for p in self.processes.values():
+                if not p.subprocesses:
+                    continue
+                if p.name not in self.channel_processes[channel]:
+                    continue
+                if not p.appliesToCategory(category):
+                    continue
+                absorbed |= {s for s in p.subprocesses if s in self.processes}
+            self._merged_away[key] = absorbed
+        return self._merged_away[key]
+
+    def processInBin(self, name, channel, category):
+        """Whether process `name` enters the datacard for this (channel, category)."""
+        if name not in self.channel_processes[channel]:
+            return False
+        if not self.processes[name].appliesToCategory(category):
+            return False
+        return name not in self.mergedAwayIn(channel, category)
+
+    def getSubEras(self, era):
+        """Get sub-eras for a given era. If era is a meta-era, return its sub-eras.
+        Otherwise return [era]."""
+        if self.isMetaEra(era):
+            return self.era_groups[era]
+        return [era]
+
+    def isMetaEra(self, era):
+        """Check if era is a meta-era."""
+        return era in self.era_groups
+
     def cbCopy(self, param_str, process, era, channel, category):
         bin_idx, bin_name = self.getBin(era, channel, category)
         return self.cb.cp().mass([param_str]).process([process]).bin([bin_name])
 
     def ECC(self):
         return itertools.product(self.eras, self.channels, self.categories)
+
+    def getCategoryGroups(self):
+        """{"SR/res2b": ["SR/res2b_dnn0", ...]} -- the slices of one base category.
+
+        Slices of the same base category are the natural unit for a per-category
+        breakdown: they are one physical selection cut into pieces, not independent
+        categories.
+        """
+        groups = {}
+        for cat in self.categories:
+            groups.setdefault(self.naming.base(cat), []).append(cat)
+        return groups
 
     def PPECC(self):
         param_bins = list(self.param_bins.keys())
@@ -166,50 +263,251 @@ class DatacardMaker:
             self.input_files[file_name] = file
         return file_name, self.input_files[file_name]
 
-    def getMultiValueLnUnc(
-        self, unc, unc_name, process, era, channel, category, model_params
-    ):  # , unc_name=None, unc_scale=None)
-        file_name, file = self.getInputFile(era, model_params)
-        hist_name = f"{channel}/{category}/{process.hist_name}"
-        if unc.getUncertaintyForProcess(process.name) != None:
-            return unc.getUncertaintyForProcess(process.name)
-        elif process.subprocesses:
-            unc_value_tot_down = 0.0
-            unc_value_tot_up = 0.0
-            yield_value_tot = 0.0
-            for subp in process.subprocesses:
-                hist_name = f"{channel}/{category}/{subp}"
-                subhist = file.Get(hist_name)
-                # newhist = self.hist_binner.applyBinning(era, channel, category, model_params, subhist)
-                if subhist == None:
-                    raise RuntimeError(
-                        f"Cannot find histogram {hist_name} in {file.GetName()}"
-                    )
-                axis = subhist.GetXaxis()
-                yield_subproc = subhist.Integral(1, axis.GetNbins() + 1)
-                unc_value = unc.getUncertaintyForProcess(subp)
-                if unc_value != None:
-                    if yield_subproc == 0:
-                        continue
-                    # print(unc_value)
-                    if isinstance(unc_value, dict):
-                        unc_value_tot_up += (
-                            unc_value[UncertaintyScale.Up] * yield_subproc
-                        )
-                        unc_value_tot_down += (
-                            unc_value[UncertaintyScale.Down] * yield_subproc
-                        )
-                    else:
-                        unc_value_tot_up += unc_value * yield_subproc
-                        unc_value_tot_down -= unc_value * yield_subproc
-                    yield_value_tot += yield_subproc
-            if unc_value_tot_up != 0.0 and unc_value_tot_down != 0:
-                return {
-                    UncertaintyScale.Down: unc_value_tot_down / yield_value_tot,
-                    UncertaintyScale.Up: unc_value_tot_up / yield_value_tot,
-                }
-            return None
+    def _getLnNValue(self, unc, process, proc_name_for_unc, sub_era, channel, category):
+        if isinstance(unc, MultiValueLnNUncertainty):
+            return unc.getUncertaintyForProcess(
+                proc_name_for_unc, sub_era, channel, category
+            )
+        if unc.appliesTo(process, sub_era, channel, category):
+            return unc.value
         return None
+
+    def _applyLnNToHist(self, hist, unc_value, direction):
+        scaled = hist.Clone()
+        if isinstance(unc_value, dict):
+            factor = 1 + unc_value[direction]
+        elif direction == UncertaintyScale.Up:
+            factor = 1 + unc_value
+        else:
+            factor = 1 - unc_value
+        scaled.Scale(factor)
+        scaled.SetDirectory(0)
+        return scaled
+
+    def _loadBinnedHist(self, file, era, channel, category, model_params, hist_name):
+        hist = file.Get(hist_name)
+        if hist is None:
+            raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
+        binned = self.hist_binner.applyBinning(
+            era, channel, category, model_params, hist
+        )
+        binned.SetDirectory(0)
+        return binned
+
+    def _getSubEraLnNVariedShapes(
+        self, unc, process, sub_era, channel, category, model_params
+    ):
+        file_name, file = self.getInputFile(sub_era, model_params)
+        hist_names = (
+            [(subp, subp) for subp in process.subprocesses]
+            if process.subprocesses
+            else [(process.hist_name, process.name)]
+        )
+        up_hist = None
+        down_hist = None
+        applies = False
+
+        for hist_name_suffix, proc_name_for_unc in hist_names:
+            hist = self._loadBinnedHist(
+                file,
+                sub_era,
+                channel,
+                category,
+                model_params,
+                f"{channel}/{category}/{hist_name_suffix}",
+            )
+            unc_value = self._getLnNValue(
+                unc, process, proc_name_for_unc, sub_era, channel, category
+            )
+            if unc_value is not None:
+                applies = True
+                sub_up = self._applyLnNToHist(hist, unc_value, UncertaintyScale.Up)
+                sub_down = self._applyLnNToHist(hist, unc_value, UncertaintyScale.Down)
+            else:
+                sub_up = hist.Clone()
+                sub_down = hist.Clone()
+                sub_up.SetDirectory(0)
+                sub_down.SetDirectory(0)
+
+            if up_hist is None:
+                up_hist = sub_up
+                down_hist = sub_down
+            else:
+                up_hist.Add(sub_up)
+                down_hist.Add(sub_down)
+
+        if process.scale != 1:
+            up_hist.Scale(process.scale)
+            down_hist.Scale(process.scale)
+        return up_hist, down_hist, applies
+
+    def getMetaEraLnNShapeUnc(self, unc, process, era, channel, category, model_params):
+        if not self.isMetaEra(era):
+            return None
+
+        nominal_shape = self.getShape(process, era, channel, category, model_params)
+        combined_up = None
+        combined_down = None
+        any_applies = False
+
+        for sub_era in self.getSubEras(era):
+            up, down, applies = self._getSubEraLnNVariedShapes(
+                unc, process, sub_era, channel, category, model_params
+            )
+            if applies:
+                any_applies = True
+            if combined_up is None:
+                combined_up = up.Clone()
+                combined_down = down.Clone()
+            else:
+                combined_up.Add(up)
+                combined_down.Add(down)
+
+        if not any_applies:
+            return None
+        return nominal_shape, {
+            UncertaintyScale.Up: combined_up,
+            UncertaintyScale.Down: combined_down,
+        }
+
+    def _canIgnoreLnNShape(self, nominal_shape, shapes):
+        nom_int = nominal_shape.Integral()
+        if nom_int == 0:
+            return True
+        up_frac = (shapes[UncertaintyScale.Up].Integral() - nom_int) / nom_int
+        down_frac = (shapes[UncertaintyScale.Down].Integral() - nom_int) / nom_int
+        return abs(up_frac) < self.ignorelnNThr and abs(down_frac) < self.ignorelnNThr
+
+    def _addMetaEraLnNAsShapeUnc(
+        self, unc_name, proc, param_str, process, era, channel, category, model_params
+    ):
+        unc = self.uncertainties[unc_name]
+        shape_result = self.getMetaEraLnNShapeUnc(
+            unc, process, era, channel, category, model_params
+        )
+        if shape_result is None:
+            return False
+        nominal_shape, shapes = shape_result
+        if self._canIgnoreLnNShape(nominal_shape, shapes):
+            print(
+                f"Ignoring uncertainty {unc_name} for {proc} in {era} {channel} {category}"
+            )
+            return False
+
+        cb_copy = self.cbCopy(param_str, proc, era, channel, category)
+        cb_copy.AddSyst(
+            self.cb,
+            unc_name,
+            UncertaintyType.shape.name,
+            ShapeUncertainty(unc_name).valueToMap(),
+        )
+        shape_set = False
+
+        def setShape(syst):
+            nonlocal shape_set
+            print(f"Setting unc shape for {syst}")
+            if shape_set:
+                raise RuntimeError("Shape already set")
+            syst.set_shapes(
+                shapes[UncertaintyScale.Up],
+                shapes[UncertaintyScale.Down],
+                nominal_shape,
+            )
+            shape_set = True
+
+        self.cbCopy(param_str, proc, era, channel, category).syst_name(
+            [unc_name]
+        ).ForEachSyst(setShape)
+        return True
+
+    def getCombinedShape(
+        self,
+        process,
+        era,
+        channel,
+        category,
+        model_params,
+        unc_name=None,
+        unc_scale=None,
+    ):
+        """Combine histograms from multiple sub-eras for a meta-era.
+        For meta-eras, this sums histograms from constituent sub-eras.
+        For regular eras, delegates to getShape."""
+        if not self.isMetaEra(era):
+            # Regular era - just get the shape normally
+            return self.getShape(
+                process, era, channel, category, model_params, unc_name, unc_scale
+            )
+
+        sub_eras = self.getSubEras(era)
+
+        if process.is_asimov_data:
+            # Build the combined asimov sum from each background's own combined
+            # (already negative-bin-resolved, with that background's own
+            # tolerance) shape -- not from raw per-sub-era background shapes
+            # summed then checked under data_obs's own (untolerant) settings.
+            # This mirrors how a real era builds asimov data: by summing
+            # already-resolved per-process shapes, never raw ones.
+            combined_hist = None
+            for bkg_proc in self.processes.values():
+                if bkg_proc.is_background:
+                    if not self.processInBin(bkg_proc.name, channel, category):
+                        continue
+                    bkg_hist = self.getCombinedShape(
+                        bkg_proc, era, channel, category, model_params
+                    )
+                    if bkg_hist is None:
+                        continue
+                    if combined_hist is None:
+                        combined_hist = bkg_hist.Clone()
+                    else:
+                        combined_hist.Add(bkg_hist)
+            if combined_hist is None:
+                raise RuntimeError("Cannot create asimov data histogram")
+            return combined_hist
+
+        # Meta-era: combine histograms from all sub-eras. Negative-bin
+        # validation is deferred until after summing (below) rather than
+        # applied per sub-era here -- a sub-era can dip negative on its own
+        # statistics while the combined shape is fine, and only the combined
+        # shape is what actually goes into the meta-era datacard.
+        combined_hist = None
+
+        for sub_era in sub_eras:
+            sub_hist = self.getShape(
+                process,
+                sub_era,
+                channel,
+                category,
+                model_params,
+                unc_name,
+                unc_scale,
+                skip_negative_bin_check=True,
+            )
+            if sub_hist is None:
+                continue
+            if combined_hist is None:
+                combined_hist = sub_hist.Clone()
+            else:
+                combined_hist.Add(sub_hist)
+
+        needs_check = combined_hist is not None and not (
+            process.is_signal and not (unc_name and unc_scale)
+        )
+        if needs_check:
+            self.resolveOrRaiseNegativeBins(
+                combined_hist,
+                process,
+                era,
+                channel,
+                category,
+                model_params,
+                unc_name,
+                unc_scale,
+                discovery_eras=sub_eras,
+            )
+
+        return combined_hist
 
     def getShape(
         self,
@@ -220,9 +518,26 @@ class DatacardMaker:
         model_params,
         unc_name=None,
         unc_scale=None,
+        skip_negative_bin_check=False,
     ):
+        # Handle meta-eras by combining sub-era shapes
+        if self.isMetaEra(era):
+            return self.getCombinedShape(
+                process, era, channel, category, model_params, unc_name, unc_scale
+            )
+
         file_name, file = self.getInputFile(era, model_params)
-        key = (file_name, process.name, era, channel, category, unc_name, unc_scale)
+        key = (
+            file_name,
+            process.name,
+            era,
+            channel,
+            category,
+            unc_name,
+            unc_scale,
+            skip_negative_bin_check,
+        )
+
         if key not in self.shapes:
             if process.is_data and (unc_name is not None or unc_scale is not None):
                 raise RuntimeError("Cannot apply uncertainty to the data process")
@@ -230,10 +545,15 @@ class DatacardMaker:
                 hist = None
                 for bkg_proc in self.processes.values():
                     if bkg_proc.is_background:
-                        if bkg_proc.name not in self.channel_processes[channel]:
+                        if not self.processInBin(bkg_proc.name, channel, category):
                             continue
                         bkg_hist = self.getShape(
-                            bkg_proc, era, channel, category, model_params
+                            bkg_proc,
+                            era,
+                            channel,
+                            category,
+                            model_params,
+                            skip_negative_bin_check=skip_negative_bin_check,
                         )
                         if hist is None:
                             hist = bkg_hist.Clone()
@@ -298,64 +618,136 @@ class DatacardMaker:
                         ),
                     )
                     self.signal_hists_by_key.setdefault(key_sig, []).append(hist)
-                else:
-                    param_str = (
-                        self.model.paramStr(model_params) if model_params else "*"
-                    )
-                    key_sig = (
-                        era,
-                        channel,
-                        category,
-                        (
-                            param_str
-                            if not self.keep_all_signal_hypothesis_into_single_datacard
-                            else "*"
-                        ),
-                    )
-                    signals = self.signal_hists_by_key.get(key_sig, [])
-                    relevant_bins = getRelevantBins(
-                        era,
-                        channel,
-                        category,
-                        signals,
-                        self.signalFractionForRelevantBins,
-                    )
-                    solution = resolveNegativeBins(
+                elif not skip_negative_bin_check:
+                    self.resolveOrRaiseNegativeBins(
                         hist,
-                        relevant_bins=relevant_bins,
-                        allow_zero_integral=process.allow_zero_integral,
-                        allow_negative_bins_within_error=process.allow_negative_bins_within_error,
-                        max_n_sigma_for_negative_bins=process.max_n_sigma_for_negative_bins,
-                        allow_negative_integral=process.allow_negative_integral,
+                        process,
+                        era,
+                        channel,
+                        category,
+                        model_params,
+                        unc_name,
+                        unc_scale,
                     )
-
-                    if not solution.accepted:
-                        axis = hist.GetXaxis()
-                        bins_edges = [
-                            str(axis.GetBinLowEdge(n))
-                            for n in range(1, axis.GetNbins() + 2)
-                        ]
-                        bin_values = [
-                            str(hist.GetBinContent(n))
-                            for n in range(1, axis.GetNbins() + 1)
-                        ]
-                        bin_errors = [
-                            str(hist.GetBinError(n))
-                            for n in range(1, axis.GetNbins() + 1)
-                        ]
-                        print(f'bins_edges: [ {", ".join(bins_edges)} ]')
-                        print(f'bin_values: [ {", ".join(bin_values)} ]')
-                        print(f'bin_errors: [ {", ".join(bin_errors)} ]')
-                        raise RuntimeError(
-                            f"Negative bins found in histogram for {channel}/{category}/{process.hist_name}"
-                            + (
-                                f" (syst {unc_name}{unc_scale})"
-                                if unc_name and unc_scale
-                                else ""
-                            )
-                        )
             self.shapes[key] = hist
         return self.shapes[key]
+
+    def resolveOrRaiseNegativeBins(
+        self,
+        hist,
+        process,
+        era,
+        channel,
+        category,
+        model_params,
+        unc_name=None,
+        unc_scale=None,
+        discovery_eras=None,
+    ):
+        """Validate/rebalance negative bins in-place on `hist`, raising if the
+        result isn't accepted. `discovery_eras`, when given (meta-era combined
+        shapes), unions relevant-signal-bin lookups across those real sub-eras
+        instead of the single `era` -- signal shapes are cached per real
+        sub-era, never under the meta-era name itself."""
+        param_str = self.model.paramStr(model_params) if model_params else "*"
+        key_param = (
+            param_str
+            if not self.keep_all_signal_hypothesis_into_single_datacard
+            else "*"
+        )
+        lookup_eras = discovery_eras if discovery_eras else [era]
+        signals = []
+        for lookup_era in lookup_eras:
+            signals.extend(
+                self.signal_hists_by_key.get(
+                    (lookup_era, channel, category, key_param), []
+                )
+            )
+        relevant_bins = getRelevantBins(
+            era,
+            channel,
+            category,
+            signals,
+            self.signalFractionForRelevantBins,
+        )
+        solution = resolveNegativeBins(
+            hist,
+            relevant_bins=relevant_bins,
+            allow_zero_integral=process.allow_zero_integral,
+            allow_negative_bins_within_error=process.allow_negative_bins_within_error,
+            max_n_sigma_for_negative_bins=process.max_n_sigma_for_negative_bins,
+            allow_negative_integral=process.allow_negative_integral,
+        )
+
+        final_integral = sum(
+            hist.GetBinContent(n) for n in range(1, hist.GetNbinsX() + 1)
+        )
+        is_degenerate = not solution.accepted or final_integral <= 0
+
+        if is_degenerate and unc_name and unc_scale:
+            # A shape systematic variation that can't be resolved into a
+            # valid (positive-integral) histogram -- whether flagged directly
+            # by resolveNegativeBins, or only zero/negative after its donor
+            # balancing happened to cancel out the whole shape -- is
+            # inherently unusable for combine's shape
+            # morphing (it requires a nonzero norm for every variation). This
+            # is a low-statistics artifact of the up/down reweighting, not a
+            # real central-value problem, so fall back to the nominal shape:
+            # i.e. treat the systematic as having no effect in this bin.
+            nominal = self.getShape(process, era, channel, category, model_params)
+            for n in range(1, hist.GetNbinsX() + 1):
+                hist.SetBinContent(n, nominal.GetBinContent(n))
+                hist.SetBinError(n, nominal.GetBinError(n))
+            return
+
+        if not solution.accepted:
+            axis = hist.GetXaxis()
+            bins_edges = [
+                str(axis.GetBinLowEdge(n)) for n in range(1, axis.GetNbins() + 2)
+            ]
+            bin_values = [
+                str(hist.GetBinContent(n)) for n in range(1, axis.GetNbins() + 1)
+            ]
+            bin_errors = [
+                str(hist.GetBinError(n)) for n in range(1, axis.GetNbins() + 1)
+            ]
+            print(f'bins_edges: [ {", ".join(bins_edges)} ]')
+            print(f'bin_values: [ {", ".join(bin_values)} ]')
+            print(f'bin_errors: [ {", ".join(bin_errors)} ]')
+            raise RuntimeError(
+                f"Negative bins found in histogram for {channel}/{category}/{process.hist_name}"
+                + (f" (syst {unc_name}{unc_scale})" if unc_name and unc_scale else "")
+            )
+
+    def getSignalProcessForParams(self, model_params):
+        """Signal Process matching model_params, or None. Used to gate a
+        param-dependent background on whether the signal hypothesis it's
+        being evaluated for actually has a shape in a given era/channel/
+        category -- backgrounds are looked up per-MX (param_dependent_bkg),
+        so a category HistRebinTask skipped for that MX has no background
+        histograms either, not just no signal."""
+        for p in self.processes.values():
+            if p.is_signal and p.params == model_params:
+                return p
+        return None
+
+    def hasNominalShape(self, process, era, channel, category):
+        """Whether process's nominal shape exists for (era, channel, category),
+        without raising. Used to skip a signal (and its per-mass background
+        counterpart) where a specific era+category+mass genuinely has no signal
+        MC -- e.g. a standalone single-era limit for a sparse category/channel
+        that only has signal statistics once combined with other eras."""
+        sub_eras = self.getSubEras(era) if self.isMetaEra(era) else [era]
+        hist_name = f"{channel}/{category}/{process.hist_name}"
+        for sub_era in sub_eras:
+            _, file = self.getInputFile(sub_era, process.params)
+            obj = file.Get(hist_name)
+            # TFile.Get() on a fully-missing nested path can return a PyROOT
+            # wrapper around a null C++ pointer, which is not `is None` but is
+            # falsy -- `if obj:` (not `is not None`) is the correct null check.
+            if obj and obj.InheritsFrom("TH1"):
+                return True
+        return False
 
     def addProcess(self, proc, era, channel, category):
         bin_idx, bin_name = self.getBin(era, channel, category)
@@ -386,7 +778,6 @@ class DatacardMaker:
 
             def setShape(p):
                 nonlocal shape_set
-                print(f"Setting shape for {p}")
                 if shape_set:
                     raise RuntimeError("Shape already set")
                 p.set_shape(shape, True)
@@ -399,6 +790,11 @@ class DatacardMaker:
                 cb_copy.ForEachProc(setShape)
 
         if process.is_signal:
+            if not self.hasNominalShape(process, era, channel, category):
+                print(
+                    f"Skipping {process.name} in {era}/{channel}/{category}: no signal shape found"
+                )
+                return
             model_params = process.params
             param_str = self.model.paramStr(model_params)
             if self.keep_all_signal_hypothesis_into_single_datacard:
@@ -413,8 +809,15 @@ class DatacardMaker:
                 self.base_of[actual_proc_name] = process.name
 
         elif self.model.param_dependent_bkg:
+            # One copy of this process per distinct signal *parameter point*, not per
+            # signal process: several signal processes (e.g. the bbWW and bbtautau
+            # decay modes) share the same mass grid, and adding the copy once per
+            # process would set the same shape twice ("Shape already set").
+            seen_params = set()
             for signal_proc in self.processes.values():
                 if not signal_proc.is_signal:
+                    continue
+                if not self.hasNominalShape(signal_proc, era, channel, category):
                     continue
                 model_params = signal_proc.params
                 param_str = (
@@ -422,6 +825,9 @@ class DatacardMaker:
                     if not self.keep_all_signal_hypothesis_into_single_datacard
                     else "*"
                 )
+                if param_str in seen_params:
+                    continue
+                seen_params.add(param_str)
                 add(model_params, param_str, proc)
                 self.param_of[(param_str, proc)] = model_params
                 self.base_of[proc] = proc
@@ -433,16 +839,45 @@ class DatacardMaker:
         isMVLnUnc = isinstance(unc, MultiValueLnNUncertainty)
 
         for proc, param_str, era, channel, category in self.PPECC():
-            if proc not in self.channel_processes[channel]:
+            if not self.processInBin(proc, channel, category):
                 continue
             process = self.processes[proc]
             if process.is_data:
                 continue
             model_params = self.param_bins.get(param_str, None)
+            if not process.hasCompatibleModelParams(
+                model_params, self.model.param_dependent_bkg
+            ):
+                continue
+            if process.is_signal:
+                if not self.hasNominalShape(process, era, channel, category):
+                    continue
+            elif self.model.param_dependent_bkg and model_params is not None:
+                signal_proc = self.getSignalProcessForParams(model_params)
+                if signal_proc is not None and not self.hasNominalShape(
+                    signal_proc, era, channel, category
+                ):
+                    continue
+
+            if self.isMetaEra(era) and isinstance(
+                unc, (LnNUncertainty, MultiValueLnNUncertainty)
+            ):
+                self._addMetaEraLnNAsShapeUnc(
+                    unc_name,
+                    proc,
+                    param_str,
+                    process,
+                    era,
+                    channel,
+                    category,
+                    model_params,
+                )
+                continue
+
             if isMVLnUnc:
-                unc_value = self.getMultiValueLnUnc(
-                    unc, unc_name, process, era, channel, category, model_params
-                )  # , unc_name=None, unc_scale=None
+                unc_value = unc.getUncertaintyForProcess(
+                    process.name, era, channel, category
+                )
 
             uncApplies = (
                 unc_value != None
@@ -450,10 +885,6 @@ class DatacardMaker:
                 else unc.appliesTo(process, era, channel, category)
             )
             if not uncApplies:
-                continue
-            if not process.hasCompatibleModelParams(
-                model_params, self.model.param_dependent_bkg
-            ):
                 continue
 
             nominal_shape = None
@@ -521,10 +952,27 @@ class DatacardMaker:
                     process = self.processes[base_name]
                     if process.is_data:
                         continue
+                    if not process.hasCompatibleModelParams(
+                        params, self.model.param_dependent_bkg
+                    ):
+                        continue
+
+                    if self.isMetaEra(era) and unc.type == UncertaintyType.lnN:
+                        self._addMetaEraLnNAsShapeUnc(
+                            unc_name,
+                            proc_name,
+                            param_str,
+                            process,
+                            era,
+                            channel,
+                            category,
+                            params,
+                        )
+                        continue
 
                     if isMVLnUnc:
-                        unc_value = self.getMultiValueLnUnc(
-                            unc, unc_name, process, era, channel, category, params
+                        unc_value = unc.getUncertaintyForProcess(
+                            process.name, era, channel, category
                         )
                     uncApplies = (
                         (unc_value is not None)
@@ -532,10 +980,6 @@ class DatacardMaker:
                         else unc.appliesTo(process, era, channel, category)
                     )
                     if not uncApplies:
-                        continue
-                    if not process.hasCompatibleModelParams(
-                        params, self.model.param_dependent_bkg
-                    ):
                         continue
 
                     nominal_shape = None
@@ -606,13 +1050,26 @@ class DatacardMaker:
             return
 
         background_names = [n for n, p in self.processes.items() if p.is_background]
+
+        # Group the signal processes by parameter point. Several signal processes can
+        # share a mass (e.g. the bbWW and bbtautau decay modes of the same resonance);
+        # they must go into the *same* datacard so the fit scales them with a common
+        # signal strength, rather than yielding a separate limit per decay mode.
+        signals_by_param = {}
         for proc_name, process in self.processes.items():
             if not process.is_signal:
                 continue
-            processes = [proc_name] + background_names
-            param_list = [self.model.paramStr(process.params)]
+            key = self.model.paramStr(process.params)
+            signals_by_param.setdefault(key, []).append(proc_name)
+
+        for param_str, signal_names in signals_by_param.items():
+            processes = list(signal_names) + background_names
+            param_list = [param_str]
             if not self.model.param_dependent_bkg:
                 param_list.append("*")
+            # Named after the primary (first configured) signal, so a single-signal
+            # config keeps exactly the file names it produced before.
+            proc_name = signal_names[0]
             dc_file = os.path.join(output, f"datacard_{proc_name}.txt")
             shape_file = os.path.join(output, f"{proc_name}.root")
 
@@ -626,6 +1083,34 @@ class DatacardMaker:
                         param_list
                     ).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
 
+                # Same breakdown by base category (all its DNN slices, all channels),
+                # for per-category limits alongside the per-channel ones.
+                for base_cat, slice_cats in self.getCategoryGroups().items():
+                    bin_names = [
+                        self.getBin(subera, subchannel, cat, return_index=False)
+                        for subchannel in self.channels
+                        for cat in slice_cats
+                    ]
+                    selected = (
+                        self.cb.cp()
+                        .era([subera])
+                        .bin(bin_names)
+                        .mass(param_list)
+                        .process(processes)
+                    )
+                    # A base category can be absent for a given mass hypothesis (e.g.
+                    # boosted at low MX, where HistRebinTask found too little signal
+                    # to slice it) -- there is no card to write then.
+                    if len(selected.bin_set()) == 0:
+                        continue
+                    cat_dir = os.path.join(
+                        output, subera, "categories", base_cat.replace("/", "_")
+                    )
+                    os.makedirs(cat_dir, exist_ok=True)
+                    selected.WriteDatacard(
+                        os.path.join(cat_dir, f"datacard_{proc_name}.txt"), shape_file
+                    )
+
             self.cb.cp().mass(param_list).process(processes).WriteDatacard(
                 dc_file, shape_file
             )
@@ -634,13 +1119,13 @@ class DatacardMaker:
         try:
             for era, channel, category in self.ECC():
                 for name, p in self.processes.items():
-                    if name not in self.channel_processes[channel]:
+                    if not self.processInBin(name, channel, category):
                         continue
                     if p.is_signal:
                         self.addProcess(name, era, channel, category)
             for era, channel, category in self.ECC():
                 for name, p in self.processes.items():
-                    if name not in self.channel_processes[channel]:
+                    if not self.processInBin(name, channel, category):
                         continue
                     if not p.is_signal:
                         self.addProcess(name, era, channel, category)

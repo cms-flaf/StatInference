@@ -17,6 +17,7 @@ class Process:
         max_n_sigma_for_negative_bins=1,
         allow_negative_integral=False,
         channels=[],
+        categories=[],
     ):
         self.name = name
         self.hist_name = hist_name
@@ -32,6 +33,7 @@ class Process:
         self.max_n_sigma_for_negative_bins = max_n_sigma_for_negative_bins
         self.allow_negative_integral = allow_negative_integral
         self.channels = channels
+        self.categories = categories
         if is_data and is_signal:
             raise RuntimeError("Data and signal flags cannot be set simultaneously")
         if is_asimov_data and not is_data:
@@ -43,6 +45,18 @@ class Process:
             self.type = "data"
         else:
             self.type = "background"
+
+    def appliesToCategory(self, category):
+        """Whether this process contributes to `category`. Empty list = all of them.
+
+        Entries match as prefixes of the datacard category name, so "SR/boosted"
+        covers SR/boosted_dnn0..3 without listing the slices: how many DNN slices
+        a category is cut into is a binning parameter, and the process list should
+        not have to change when it does.
+        """
+        if not self.categories:
+            return True
+        return any(category.startswith(prefix) for prefix in self.categories)
 
     def __str__(self):
         str_rep = (
@@ -85,6 +99,7 @@ class Process:
         )
         max_n_sigma_for_negative_bins = entry.get("max_n_sigma_for_negative_bins", 1)
         channels = entry.get("channels", [])
+        categories = entry.get("categories", [])
         if type(scale) == str:
             scale = eval(scale)
         if "param_values" not in entry:
@@ -105,6 +120,7 @@ class Process:
                     max_n_sigma_for_negative_bins=max_n_sigma_for_negative_bins,
                     allow_negative_integral=allow_negative_integral,
                     channels=channels,
+                    categories=categories,
                 )
             ]
 
@@ -133,6 +149,7 @@ class Process:
                     allow_negative_integral=allow_negative_integral,
                     params=param_dict,
                     channels=channels,
+                    categories=categories,
                 )
             )
         return processes

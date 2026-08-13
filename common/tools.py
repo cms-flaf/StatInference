@@ -1,5 +1,110 @@
 import math
+import re
+
+from string import Formatter
+
 import numpy as np
+
+
+class CategoryNaming:
+    """Names the sub-categories a 2D -> categorized-1D transformation cuts a base
+    category into, and reads those names back.
+
+    The pattern is configuration rather than code: nothing here assumes the sliced axis
+    is a DNN score, or that the analysis producing the 2D shapes has one at all. Both
+    directions are built from that one pattern, so the code that writes a category name
+    and the code that parses it back cannot drift apart -- which is the failure this
+    replaces, where a format string wrote the names and hardcoded regexes read them, and
+    changing the format silently stopped the regexes matching, leaving every slice as its
+    own base category instead of raising.
+    """
+
+    # Deliberately neutral: an analysis that wants its discriminant in the name says so in
+    # its configuration (HH->bbWW pins "{base_category}_dnn{slice_idx}"), rather than every
+    # analysis inheriting one analysis's choice from here. "_slice" rather than "_cat"
+    # because hand-written category names do use "_cat" -- x_hh_bbtautau_run2.yaml has
+    # "res1b_cat3_masswindow" -- and a default that can collide with an unsliced name would
+    # have split() claiming it as a slice of something.
+    default_pattern = "{base_category}_slice{slice_idx}"
+
+    # Sub-expression per placeholder. base_category is greedy so a base name that itself
+    # ends in something the pattern could match still resolves to the last slice index,
+    # which is the one the pattern wrote.
+    placeholders = {
+        "base_category": r"(?P<base_category>.+)",
+        "slice_idx": r"(?P<slice_idx>\d+)",
+    }
+
+    def __init__(self, pattern=None):
+        self.pattern = pattern or self.default_pattern
+        regex = ""
+        seen = set()
+        for literal, field, _, conversion in Formatter().parse(self.pattern):
+            regex += re.escape(literal)
+            if field is None:
+                continue
+            if field not in self.placeholders:
+                raise RuntimeError(
+                    f"category pattern '{self.pattern}': unknown placeholder "
+                    f"'{{{field}}}'; known are "
+                    + ", ".join("'{%s}'" % p for p in sorted(self.placeholders))
+                )
+            if field in seen:
+                raise RuntimeError(
+                    f"category pattern '{self.pattern}': '{{{field}}}' appears more than "
+                    "once, so a name built from it cannot be read back unambiguously"
+                )
+            if conversion is not None:
+                raise RuntimeError(
+                    f"category pattern '{self.pattern}': conversion '!{conversion}' on "
+                    f"'{{{field}}}' would not survive the round trip back to a category"
+                )
+            seen.add(field)
+            regex += self.placeholders[field]
+        missing = sorted(set(self.placeholders) - seen)
+        if missing:
+            raise RuntimeError(
+                f"category pattern '{self.pattern}' must use every placeholder; missing "
+                + ", ".join("'{%s}'" % m for m in missing)
+            )
+        self._regex = re.compile("^" + regex + "$")
+
+    @classmethod
+    def fromConfig(cls, cfg):
+        """From a datacard configuration's ``binning:`` block, or the default pattern
+        when it declares none (or when there is no ``binning:`` block at all, i.e. the
+        input is already 1D and nothing was ever sliced)."""
+        return cls((cfg.get("binning") or {}).get("category_pattern"))
+
+    def name(self, base_category, slice_idx):
+        return self.pattern.format(base_category=base_category, slice_idx=slice_idx)
+
+    def expand(self, base_categories, n_slices):
+        """Base category names -> the per-slice names that exist in the rebinned files.
+
+        Every consumer of the datacard configuration's ``categories`` list needs the same
+        expansion (maker.py's datacard bins, plot_rebinned.py's panels), and hist_rebin_2d.py
+        writes with the same pattern, so it is done in one place.
+        """
+        return [
+            self.name(base, idx) for base in base_categories for idx in range(n_slices)
+        ]
+
+    def split(self, category):
+        """Inverse of name(): "SR/res2b_dnn2" -> ("SR/res2b", 2).
+
+        An unsliced name returns (category, None) rather than raising -- a configuration
+        with no ``binning:`` block has categories that were never sliced, and they are
+        legitimately their own base.
+        """
+        match = self._regex.match(category)
+        if not match:
+            return category, None
+        return match.group("base_category"), int(match.group("slice_idx"))
+
+    def base(self, category):
+        """The base category a slice belongs to, or the name itself if unsliced."""
+        return self.split(category)[0]
 
 
 class PackageWrapper:
