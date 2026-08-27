@@ -37,8 +37,6 @@ class DatacardMaker:
         input_path,
         hist_bins=None,
         param_values=None,
-        n_slices=None,
-        category_pattern=None,
         **kwargs,
     ):
         self.cb = CombineHarvester()
@@ -63,31 +61,13 @@ class DatacardMaker:
         self.analysis = cfg["analysis"]
         self.eras = cfg["eras"]
         self.channels = cfg["channels"]
-        # For input produced by HistRebinTask the configuration lists base categories
-        # ("SR/res2b") while the datacard bins are the per-slice names it wrote.
-        # n_slices comes from the caller when given -- HistRebinTask's resolved value
-        # is authoritative, since a command-line override would otherwise leave this
-        # deriving a different slice count than the rebinned files contain.
-        #
-        # No slice count anywhere (no `binning:` block and no caller value) means the
-        # input did not come from HistRebinTask -- it is already binned, and its
-        # categories are exactly the ones the configuration lists. An explicit 0 says the
-        # same for a configuration that does carry a `binning:` block.
-        n_slices = n_slices
-        if n_slices is None:
-            n_slices = (cfg.get("binning") or {}).get("n_slices")
-        # Same rule for the pattern that names those slices: the caller's resolved value
-        # wins, otherwise the configuration's own.
-        self.naming = (
-            CategoryNaming(category_pattern)
-            if category_pattern
-            else CategoryNaming.fromConfig(cfg)
-        )
-        self.categories = (
-            self.naming.expand(cfg["categories"], int(n_slices))
-            if n_slices
-            else list(cfg["categories"])
-        )
+        # The categories are exactly the ones the configuration lists -- the datacard bins
+        # are whatever directories the input shapes contain, and nothing here derives them.
+        # For input that a 2D->1D rebinning produced that means the sliced names
+        # ("SR/res2b_dnn0"), and `category_pattern` is how they are taken apart again to
+        # group the slices of one base category.
+        self.naming = CategoryNaming.fromConfig(cfg)
+        self.categories = list(cfg["categories"])
         self.signalFractionForRelevantBins = cfg["signalFractionForRelevantBins"]
 
         self.era_groups = cfg.get("era_groups", {})
@@ -482,7 +462,7 @@ class DatacardMaker:
                 model_params,
                 unc_name,
                 unc_scale,
-                skip_negative_bin_check=True,
+                defer_negative_bin_check=True,
             )
             if sub_hist is None:
                 continue
@@ -518,8 +498,18 @@ class DatacardMaker:
         model_params,
         unc_name=None,
         unc_scale=None,
-        skip_negative_bin_check=False,
+        defer_negative_bin_check=False,
     ):
+        """One process's shape in one bin.
+
+        `defer_negative_bin_check` exists for exactly one caller: getCombinedShape(), which
+        fetches each sub-era of a meta-era and validates only their sum. A sub-era can dip
+        negative on its own statistics while the combined shape -- the one that actually
+        enters the datacard -- is fine, so checking it per sub-era would reject shapes that
+        are perfectly good. It is part of the cache key because validation rebalances the
+        histogram in place, so the checked and unchecked forms are genuinely different
+        objects.
+        """
         # Handle meta-eras by combining sub-era shapes
         if self.isMetaEra(era):
             return self.getCombinedShape(
@@ -535,7 +525,7 @@ class DatacardMaker:
             category,
             unc_name,
             unc_scale,
-            skip_negative_bin_check,
+            defer_negative_bin_check,
         )
 
         if key not in self.shapes:
@@ -553,7 +543,7 @@ class DatacardMaker:
                             channel,
                             category,
                             model_params,
-                            skip_negative_bin_check=skip_negative_bin_check,
+                            defer_negative_bin_check=defer_negative_bin_check,
                         )
                         if hist is None:
                             hist = bkg_hist.Clone()
@@ -618,7 +608,7 @@ class DatacardMaker:
                         ),
                     )
                     self.signal_hists_by_key.setdefault(key_sig, []).append(hist)
-                elif not skip_negative_bin_check:
+                elif not defer_negative_bin_check:
                     self.resolveOrRaiseNegativeBins(
                         hist,
                         process,
@@ -724,7 +714,7 @@ class DatacardMaker:
         param-dependent background on whether the signal hypothesis it's
         being evaluated for actually has a shape in a given era/channel/
         category -- backgrounds are looked up per-MX (param_dependent_bkg),
-        so a category HistRebinTask skipped for that MX has no background
+        so a category the rebinning skipped for that MX has no background
         histograms either, not just no signal."""
         for p in self.processes.values():
             if p.is_signal and p.params == model_params:
@@ -1099,7 +1089,7 @@ class DatacardMaker:
                         .process(processes)
                     )
                     # A base category can be absent for a given mass hypothesis (e.g.
-                    # boosted at low MX, where HistRebinTask found too little signal
+                    # boosted at low MX, where the rebinning found too little signal
                     # to slice it) -- there is no card to write then.
                     if len(selected.bin_set()) == 0:
                         continue

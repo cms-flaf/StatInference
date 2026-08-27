@@ -1,4 +1,5 @@
 import array
+import json
 import math
 import os
 import sys
@@ -18,6 +19,73 @@ from StatInference.common.param_parse import extractParameters, applyParameters
 from StatInference.dc_make.model import Model
 
 ROOT = importROOT()
+
+
+# Written next to the rebinned shapes, and read back by --binning to replay them.
+BINNING_JSON = "binning.json"
+
+# The knobs that decide the binning, with the values a configuration gets when it does
+# not say otherwise. They belong to an analysis rather than to this file -- what a slice
+# needs to be worth keeping depends on the sample sizes and the selection, and a test
+# configuration wants them at zero -- so every production should state its own in a
+# binning yaml. See bin_opt_2d/binning.yaml for the annotated HH->bbWW set.
+BINNING_DEFAULTS = {
+    "n_slices": 4,
+    "category_pattern": None,  # None -> CategoryNaming's own neutral default
+    "slice_var": "x",
+    "max_bins_per_slice": 10,
+    "min_slice_bkg_sum": 1.0,
+    "min_slice_bkg_neff": 4.0,
+    "min_slice_bkg_each": 0.01,
+    "min_slice_bkg_each_neff": 0.0,
+    "min_bin_bkg_each": 0.01,
+    "min_bin_bkg_neff": 4.0,
+    "bkg_per_bin": 5.0,
+    "min_bkg_frac": 0.05,
+    "min_signal": 0.5,
+    "significance_mode": "asimov",
+}
+
+
+def load_binning_config(path, overrides=None):
+    """Merge the binning yaml over the defaults, then command-line overrides over that.
+
+    Unknown keys raise rather than being ignored: a misspelled floor that silently does
+    nothing is the failure mode worth spending an exception on.
+    """
+    declared = {}
+    if path:
+        with open(path, "r") as f:
+            declared = yaml.safe_load(f) or {}
+    unknown = set(declared) - set(BINNING_DEFAULTS)
+    if unknown:
+        raise RuntimeError(
+            f"{path}: unknown binning key(s) {sorted(unknown)}. "
+            f"Known keys: {sorted(BINNING_DEFAULTS)}."
+        )
+    knobs = dict(BINNING_DEFAULTS)
+    knobs.update(declared)
+    for key, value in (overrides or {}).items():
+        if value is not None:
+            knobs[key] = value
+    return knobs
+
+
+def lookup_frozen(frozen_binning, era, mass, channel, category):
+    """The recorded binning for one channel/category, or None if it was skipped then.
+
+    A category absent from the record was skipped by the run that wrote it (too little
+    signal, or a background missing from a discovery era), so it is skipped again rather
+    than quietly re-optimised -- a replay that rebinned some categories and froze others
+    would be neither the old binning nor a new one.
+    """
+    return (
+        frozen_binning.get("binning", {})
+        .get(era, {})
+        .get(str(mass), {})
+        .get(channel, {})
+        .get(category)
+    )
 
 
 def load_config(config_path):
@@ -572,7 +640,7 @@ def discover_binning(
 ):
     """bkg2d_by_name: {background_name: [hist per discovery era, ...]}. The list
     is usually a single era's own histogram (standalone limit) or all of a
-    meta-era's sub-eras (combined limit) -- see HistRebinTask.get_discovery_eras().
+    meta-era's sub-eras (combined limit) -- see --discovery-eras.
     Yields are summed across whatever's in the list; see _bkg_yields(). sig2d is
     the same discovery reference's (already-summed) signal histogram: its x
     projection picks the significance-maximizing slice boundaries, and its y
@@ -697,6 +765,55 @@ def slice_ranges(x_axis, slices):
     return ranges
 
 
+def slices_to_record(slices, x_axis, y_axis):
+    """The discovered structure as plain data, for binning.json.
+
+    Both forms are written. The bin index ranges are what the code actually cuts on and
+    are what a replay restores; the physical edges alongside them are what a human reads,
+    and what makes the record meaningful next to a plot.
+    """
+    return {
+        "n_x_bins": x_axis.GetNbins(),
+        "n_y_bins": y_axis.GetNbins(),
+        "slices": [
+            {
+                "x_range": list(sl["x_range"]),
+                "x_edges": x_edges,
+                "y_ranges": [list(r) for r in sl["y_ranges"]],
+                "y_edges": bin_edges(y_axis, sl["y_ranges"]),
+            }
+            for sl, x_edges in zip(slices, slice_ranges(x_axis, slices))
+        ],
+    }
+
+
+def record_to_slices(record, x_axis, y_axis, where):
+    """Inverse of slices_to_record(): what discover_binning() would have returned.
+
+    The axis sizes are checked rather than trusted. Bin indices only mean anything against
+    the axes they were found on, so a binning.json replayed over input with a different
+    binning would otherwise cut the shapes in silently wrong places -- which is exactly
+    what freezing a binning is supposed to rule out.
+    """
+    for name, axis, recorded in (
+        ("x", x_axis, record["n_x_bins"]),
+        ("y", y_axis, record["n_y_bins"]),
+    ):
+        if axis.GetNbins() != recorded:
+            raise RuntimeError(
+                f"{where}: recorded binning was found on a {recorded}-bin {name} axis, "
+                f"but the input has {axis.GetNbins()}. The binning.json does not belong "
+                "to this input."
+            )
+    return [
+        {
+            "x_range": tuple(sl["x_range"]),
+            "y_ranges": [tuple(r) for r in sl["y_ranges"]],
+        }
+        for sl in record["slices"]
+    ]
+
+
 def rebin_hist_2d(hist2d, slices, name, naming):
     """Given the discovered slice structure, produce one final TH1 per slice
     for this specific histogram (nominal or a systematic variation)."""
@@ -732,19 +849,15 @@ def process_category(
     mass,
     era,
     discovery_files,
-    n_slices,
-    max_bins_per_slice,
-    min_slice_sum,
-    min_bin_each,
-    min_signal,
-    min_slice_bkg_neff=0.0,
-    min_bkg_frac=0.0,
-    min_bin_bkg_neff=0.0,
-    bkg_per_bin=0.0,
-    sig_mode="sb",
-    min_slice_bkg_each=0.0,
-    min_slice_bkg_each_neff=0.0,
+    knobs,
+    frozen=None,
 ):
+    """Rebin one channel/category, returning the binning it used (None if skipped).
+
+    With `frozen` given the edges are replayed from a previous run's binning.json and no
+    optimisation happens at all; the discovery files are then only read for the axes.
+    """
+    min_signal = knobs["min_signal"]
     prefix = f"{channel}/{category}/"
     cat_dir = in_file.Get(f"{channel}/{category}")
     if not cat_dir:
@@ -784,21 +897,27 @@ def process_category(
         print(f"    [skip] {channel}/{category} MX={mass}: {reason}, skipping")
         return
 
-    slices = discover_binning(
-        disc_sig,
-        disc_bkg_by_name,
-        n_slices,
-        max_bins_per_slice,
-        min_slice_sum,
-        min_bin_each,
-        min_slice_bkg_neff,
-        min_bkg_frac,
-        min_bin_bkg_neff,
-        bkg_per_bin,
-        sig_mode,
-        min_slice_bkg_each,
-        min_slice_bkg_each_neff,
-    )
+    where = f"{era}/MX={mass}/{channel}/{category}"
+    if frozen is not None:
+        slices = record_to_slices(
+            frozen, disc_sig.GetXaxis(), disc_sig.GetYaxis(), where
+        )
+    else:
+        slices = discover_binning(
+            disc_sig,
+            disc_bkg_by_name,
+            knobs["n_slices"],
+            knobs["max_bins_per_slice"],
+            knobs["min_slice_bkg_sum"],
+            knobs["min_bin_bkg_each"],
+            knobs["min_slice_bkg_neff"],
+            knobs["min_bkg_frac"],
+            knobs["min_bin_bkg_neff"],
+            knobs["bkg_per_bin"],
+            knobs["significance_mode"],
+            knobs["min_slice_bkg_each"],
+            knobs["min_slice_bkg_each_neff"],
+        )
     # The selection each slice stands for is otherwise nowhere in the output: the sliced
     # categories are named by index and the surviving axis is the rebinned one. It is the
     # slice directory's own title, so it travels with the histograms and there is no
@@ -823,6 +942,8 @@ def process_category(
             out_file.cd(f"{channel}/{out_cat}")
             h.Write(key)
 
+    return slices_to_record(slices, disc_sig.GetXaxis(), disc_sig.GetYaxis())
+
 
 def run(
     input_dir,
@@ -830,29 +951,32 @@ def run(
     config_path,
     era,
     discovery_eras,
-    n_slices,
-    max_bins_per_slice,
-    min_slice_sum,
-    min_bin_each,
-    min_signal,
-    min_slice_bkg_neff=0.0,
-    min_bkg_frac=0.0,
-    min_bin_bkg_neff=0.0,
-    bkg_per_bin=0.0,
-    sig_mode="sb",
-    min_slice_bkg_each=0.0,
-    min_slice_bkg_each_neff=0.0,
-    category_pattern=None,
-    slice_var="x",
+    knobs,
+    frozen_binning=None,
 ):
+    """Rebin one era's shapes, writing the rebinned files and the binning that produced
+    them.
+
+    Output layout is "<output_dir>/<era>/<variable>/<variable>.root" -- the same layout
+    HistMergerTask writes -- so a production of these can be consumed by pointing the
+    datacard chain's --hists-version at it, with nothing downstream aware that a rebinning
+    happened.
+    """
     cfg = load_config(config_path)
-    # Taken from the command line rather than from the configuration just read, so that an
-    # override reaches the names actually written. HistRebinTask resolves the value once
-    # and hands the same one to every reader, so the written names and the datacard bins
-    # cannot come from different patterns.
-    cfg["naming"] = CategoryNaming(category_pattern)
-    cfg["slice_var"] = slice_var
+    # The pattern that names the sliced categories comes from the binning configuration
+    # alongside the edges themselves: it is the writer's choice, and every reader of these
+    # shapes recovers the base category from the same pattern in the datacard config.
+    cfg["naming"] = CategoryNaming(knobs["category_pattern"])
+    cfg["slice_var"] = knobs["slice_var"]
     model = cfg["model"]
+
+    record = {
+        "slice_var": knobs["slice_var"],
+        "category_pattern": cfg["naming"].pattern,
+        "knobs": {k: v for k, v in sorted(knobs.items())},
+        "binning": {},
+    }
+    by_mass = record["binning"].setdefault(era, {})
 
     for mass in cfg["mass_values"]:
         file_name = model.getInputFileName(era, {cfg["signal_param_name"]: mass})
@@ -862,23 +986,21 @@ def run(
             for disc_era in discovery_eras
         ]
 
-        # output_dir is already period-scoped (HistRebinTask.output() = HistRebin/<era>),
-        # so strip the leading "<era>/" that getInputFileName() adds -- otherwise the era
-        # ends up doubled in the output path.
-        era_prefix = era + "/"
-        out_rel = (
-            file_name[len(era_prefix) :]
-            if file_name.startswith(era_prefix)
-            else file_name
-        )
-        out_path = os.path.join(output_dir, out_rel)
+        # getInputFileName() already yields "<era>/<variable>/<variable>.root", which is
+        # exactly the layout --output is meant to hold, so it is used as-is: --input and
+        # --output are the same shape and the result can be read as a merged-hist tree.
+        out_path = os.path.join(output_dir, file_name)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         out_file = ROOT.TFile.Open(out_path, "RECREATE")
 
         print(f"Rebinning era={era} MX={mass} -> {out_path}")
+        by_channel = by_mass.setdefault(str(mass), {})
         for channel in cfg["channels"]:
             for category in cfg["categories"]:
-                process_category(
+                frozen = None
+                if frozen_binning is not None:
+                    frozen = lookup_frozen(frozen_binning, era, mass, channel, category)
+                used = process_category(
                     in_file,
                     out_file,
                     channel,
@@ -887,31 +1009,37 @@ def run(
                     mass,
                     era,
                     discovery_files,
-                    n_slices,
-                    max_bins_per_slice,
-                    min_slice_sum,
-                    min_bin_each,
-                    min_signal,
-                    min_slice_bkg_neff,
-                    min_bkg_frac,
-                    min_bin_bkg_neff,
-                    bkg_per_bin,
-                    sig_mode,
-                    min_slice_bkg_each,
-                    min_slice_bkg_each_neff,
+                    knobs,
+                    frozen=frozen,
                 )
+                if used is not None:
+                    by_channel.setdefault(channel, {})[category] = used
 
         out_file.Close()
         in_file.Close()
         for f in discovery_files:
             f.Close()
 
+    # Written next to the shapes rather than beside the script: the binning belongs to the
+    # production it produced, and --binning replays it onto the same input.
+    json_path = os.path.join(output_dir, BINNING_JSON)
+    os.makedirs(output_dir, exist_ok=True)
+    with open(json_path, "w") as f:
+        json.dump(record, f, indent=2, sort_keys=True)
+    print(f"Wrote {json_path}")
+
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Rebin 2D histograms into significance-sliced 1D shapes."
+        description="Rebin 2D histograms into significance-sliced 1D shapes.\n\n"
+        "A standalone pre-step, not part of the datacard chain: it writes a "
+        "'<era>/<variable>/<variable>.root' tree in the same layout HistMergerTask "
+        "produces, so a production of these is consumed by pointing the chain's "
+        "--hists-version at it. It also writes " + BINNING_JSON + ", which --binning "
+        "replays to reproduce a binning instead of re-deriving one.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--input",
@@ -929,6 +1057,23 @@ if __name__ == "__main__":
         "--config", required=True, type=str, help="datacard configuration yaml"
     )
     parser.add_argument(
+        "--binning-config",
+        required=False,
+        type=str,
+        default=None,
+        help="binning yaml holding the knobs below; anything it does not set takes the "
+        "built-in default, and an explicit flag overrides both",
+    )
+    parser.add_argument(
+        "--binning",
+        required=False,
+        type=str,
+        default=None,
+        help=f"a previous run's {BINNING_JSON}. Given one, the recorded edges are applied "
+        "as-is and nothing is optimised -- this is how a binning is frozen and a "
+        "production reproduced. The knobs are then unused",
+    )
+    parser.add_argument(
         "--era", required=True, type=str, help="era to rebin and write out"
     )
     parser.add_argument(
@@ -936,131 +1081,94 @@ if __name__ == "__main__":
         required=False,
         type=str,
         default=None,
-        help="comma-separated eras summed to discover bin edges (defaults to --era alone)",
+        help="comma-separated eras summed to discover bin edges (defaults to --era alone)."
+        " Summing an era group is what lets a combined fit use bins its single eras could "
+        "not support",
     )
-    parser.add_argument(
-        "--category-pattern",
-        required=False,
-        type=str,
-        default=None,
-        help="pattern naming the categories a base category is sliced into, e.g. "
-        f"'{CategoryNaming.default_pattern}' (the default). Must use both "
-        "{base_category} and {slice_idx}; every reader of these shapes is handed the "
-        "same pattern, and it is what they parse the names back with",
-    )
-    parser.add_argument(
-        "--slice-var",
-        required=False,
-        type=str,
-        default="x",
-        help="name of the sliced axis, used only to label each slice directory with the "
-        "selection it stands for (e.g. 'DNN' -> '0.80 < DNN < 1.00')",
-    )
-    parser.add_argument(
-        "--n-slices",
-        required=False,
-        type=int,
-        default=4,
-        help="fixed number of slices per category (must be the same for every mass point)",
-    )
-    parser.add_argument(
-        "--max-bins-per-slice",
-        required=False,
-        type=int,
-        default=10,
-        help="bins to aim for inside each slice; backed off until achievable",
-    )
-    parser.add_argument(
-        "--min-slice-bkg-sum",
-        required=False,
-        type=float,
-        default=1.0,
-        help="minimum summed-background yield required in a slice",
-    )
-    parser.add_argument(
-        "--min-bin-bkg-each",
-        required=False,
-        type=float,
-        default=0.01,
-        help="minimum yield required of every individual background in a mass bin",
-    )
-    parser.add_argument(
-        "--min-slice-bkg-neff",
-        required=False,
-        type=float,
-        default=0.0,
-        help="minimum effective MC entries ((sum/err)^2) required of the summed "
-        "background for a slice boundary to be selectable",
-    )
-    parser.add_argument(
-        "--min-bkg-frac",
-        required=False,
-        type=float,
-        default=0.0,
-        help="backgrounds contributing less than this fraction of the total are "
-        "exempt from --min-bin-bkg-each, so a statistically starved minor "
-        "process cannot collapse a slice to a single mass bin",
-    )
-    parser.add_argument(
-        "--min-signal",
-        required=False,
-        type=float,
-        default=0.5,
-        help="minimum discovery signal yield required to slice a category at all "
-        "(below this, e.g. boosted at low MX, the category is skipped entirely)",
-    )
-    parser.add_argument(
-        "--min-bin-bkg-neff",
-        required=False,
-        type=float,
-        default=0.0,
-        help="minimum effective MC entries required of the summed background in "
-        "every mass bin. The --min-slice-bkg-neff analogue for the bins inside a "
-        "slice, which is where essentially every fit bin lives",
-    )
-    parser.add_argument(
-        "--bkg-per-bin",
-        required=False,
-        type=float,
-        default=0.0,
-        help="target summed-background yield per mass bin; caps the bin count at "
-        "B_slice/this instead of always using --max-bins-per-slice. 0 disables, "
-        "restoring the fixed --max-bins-per-slice for every slice",
-    )
-    parser.add_argument(
-        "--min-slice-bkg-each",
-        required=False,
-        type=float,
-        default=0.0,
-        help="minimum yield required of every non-negligible background in a "
-        "slice. The --min-bin-bkg-each analogue for the slice boundaries "
-        "themselves, which were previously gated on the summed background only: "
-        "a background that had fluctuated negative was hidden inside a healthy "
-        "total, and the resulting slice could not be made into a datacard. "
-        "Backgrounds below --min-bkg-frac of the category total are exempt. "
-        "0 disables",
-    )
-    parser.add_argument(
-        "--min-slice-bkg-each-neff",
-        required=False,
-        type=float,
-        default=0.0,
-        help="minimum effective MC entries required of every non-negligible "
-        "background in a slice (same exemption as --min-slice-bkg-each). Much "
-        "stronger than --min-slice-bkg-each and correspondingly expensive: on "
-        "Run3_Early a threshold of 4 cost 35% of the combined Asimov Z in "
-        "muMu/SR/res2b at m500, against 2.3% for the yield floor alone. 0 disables",
-    )
+
+    # Knob overrides. All default to None so that "not given" is distinguishable from
+    # "given the same value as the default", which is what lets --binning-config win.
+    knob_args = {
+        "n_slices": (int, "fixed number of slices per category (same for every mass)"),
+        "category_pattern": (
+            str,
+            "pattern naming the sliced categories, e.g. "
+            "'{base_category}_dnn{slice_idx}'; must use both {base_category} and "
+            "{slice_idx}, and the datacard configuration reading these shapes must "
+            "declare the same one",
+        ),
+        "slice_var": (
+            str,
+            "name of the sliced axis, used to label each slice directory with the "
+            "selection it stands for (e.g. 'DNN' -> '0.80 < DNN < 1.00')",
+        ),
+        "max_bins_per_slice": (int, "bins to aim for inside each slice"),
+        "min_slice_bkg_sum": (
+            float,
+            "minimum summed-background yield required in a slice",
+        ),
+        "min_slice_bkg_neff": (
+            float,
+            "minimum effective MC entries of the summed background for a slice boundary "
+            "to be selectable",
+        ),
+        "min_slice_bkg_each": (
+            float,
+            "minimum yield required of every non-negligible background in a slice",
+        ),
+        "min_slice_bkg_each_neff": (
+            float,
+            "minimum effective MC entries of every non-negligible background in a slice; "
+            "much stronger than the yield floor and correspondingly expensive",
+        ),
+        "min_bin_bkg_each": (
+            float,
+            "minimum yield required of every non-negligible background in a bin",
+        ),
+        "min_bin_bkg_neff": (
+            float,
+            "minimum effective MC entries of the summed background in a bin",
+        ),
+        "bkg_per_bin": (
+            float,
+            "summed background to aim for per bin; overrides max_bins_per_slice when it "
+            "binds",
+        ),
+        "min_bkg_frac": (
+            float,
+            "backgrounds below this fraction of the category total are exempt from the "
+            "per-background floors, so a negligible process cannot veto every boundary",
+        ),
+        "min_signal": (float, "minimum signal integral for a category to be rebinned"),
+    }
+    for name, (typ, help_text) in knob_args.items():
+        parser.add_argument(
+            f"--{name.replace('_', '-')}",
+            required=False,
+            type=typ,
+            default=None,
+            help=help_text,
+        )
     parser.add_argument(
         "--significance-mode",
         required=False,
         type=str,
-        default="sb",
+        default=None,
         choices=["sb", "asimov"],
         help="figure of merit for slice boundaries: 'sb' = S/sqrt(B+sigmaB^2), "
         "'asimov' = Poisson-correct Asimov significance (valid at low B)",
     )
     args = parser.parse_args()
+
+    overrides = {name: getattr(args, name) for name in knob_args}
+    overrides["significance_mode"] = args.significance_mode
+    knobs = load_binning_config(args.binning_config, overrides)
+
+    frozen_binning = None
+    if args.binning:
+        with open(args.binning, "r") as f:
+            frozen_binning = json.load(f)
+        print(f"Replaying the binning recorded in {args.binning}; not optimising")
 
     discovery_eras = (
         args.discovery_eras.split(",") if args.discovery_eras else [args.era]
@@ -1072,18 +1180,6 @@ if __name__ == "__main__":
         args.config,
         args.era,
         discovery_eras,
-        args.n_slices,
-        args.max_bins_per_slice,
-        args.min_slice_bkg_sum,
-        args.min_bin_bkg_each,
-        args.min_signal,
-        args.min_slice_bkg_neff,
-        args.min_bkg_frac,
-        args.min_bin_bkg_neff,
-        args.bkg_per_bin,
-        args.significance_mode,
-        args.min_slice_bkg_each,
-        args.min_slice_bkg_each_neff,
-        category_pattern=args.category_pattern,
-        slice_var=args.slice_var,
+        knobs,
+        frozen_binning=frozen_binning,
     )

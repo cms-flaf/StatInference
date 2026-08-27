@@ -3,43 +3,46 @@
 ## Two ways bins get decided
 
 Two independent things in this repository choose the binning of the shapes that go into
-the datacards. They do not share code, and an analysis uses one or the other.
+the datacards. They do not share code, and an analysis uses one or the other. **Neither is
+part of the datacard chain**: both are offline pre-steps that produce input the chain then
+consumes, so `CreateDatacardsTask` reads whatever shapes it is pointed at and does no
+binning of its own.
 
-**1. In-chain rebinning — `dc_make/hist_rebin_2d.py`.** A production step, run by
-`HistRebinTask` in `law/HistRebinTask.py`: it derives the bin edges from the shapes themselves
-(no fits, no limits) and writes the rebinned histograms the datacards are built from, so
-`CreateDatacardsTask` cannot run without it. Its knobs come from the `binning:` block of
-the datacard configuration — see the annotated block in the HH→bbWW Run 3 configuration,
-`config/Datacards/x_hh_bbww_DL_run3.yaml` in the analysis area. It cuts each base
-category (`SR/res2b`) into per-slice categories whose names come from that block's
-`category_pattern`, e.g. `{base_category}_dnn{slice_idx}` -- the pattern is the
-analysis's choice, and nothing in this repository assumes the sliced axis is a DNN
-score. `common/tools.py:CategoryNaming` both writes those names and parses them back
-from the one pattern, and every consumer of the configuration's `categories` list
-expands them through it, so the datacard bins and the written histograms cannot fall out
-of step.
+**1. Shape-driven 2D→1D rebinning — `bin_opt_2d/rebin_2d.py`.** Derives the bin edges from
+the shapes themselves (no fits, no limits): it cuts the x axis of each 2D input into slices
+that become datacard categories, and rebins y into the bins of each slice. Its knobs come
+from `bin_opt_2d/binning.yaml`; `bin_opt_2d/call_rebin_2d.sh` is a worked example.
 
-**2. Offline binning optimisation — `bin_opt/`.** A search harness, documented below: it
-builds candidate binnings, runs limits with combine for each, and ranks them. Its product
-is a `hist_bins` JSON, applied at datacard time by `dc_make/binner.py`. It is not part of
-the datacard chain and exposes no importable API — every module is a script driven by
-`bin_opt/bin_optimization.yaml`.
+It writes two things next to each other:
 
-Which one an analysis is on is visible in its configuration: the in-chain path has a
-`binning:` block and leaves `hist_bins` unset (as HH→bbWW's `config/global.yaml` does),
-while the `bin_opt` path sets `hist_bins` and has no `binning:` block (as
-`config/x_hh_bbtautau_run2.yaml` does).
+- the rebinned shapes, in the same `<era>/<variable>/<variable>.root` layout FLAF's
+  `HistMergerTask` produces — so the chain consumes them by pointing `--hists-version` at
+  that production, and nothing downstream is aware a rebinning happened;
+- `binning.json`, recording the edges it chose. Passing it back as `--binning` replays
+  that binning exactly instead of re-deriving one, which is how a production is frozen and
+  reproduced.
 
-That difference is also what decides how `categories:` is read. With a `binning:` block
-(or an explicit `--n-slices`), `dc_make` expands the listed base categories into the
-sliced names above, because those are the directories `HistRebinTask` wrote. Without one,
-the categories are used exactly as listed — which is what an input file that is already
-1D and binned contains. Pass `--n-slices 0` to force the latter for a configuration
-that does carry a `binning:` block.
+Each base category (`SR/res2b`) becomes per-slice categories named by the
+`category_pattern` knob, e.g. `{base_category}_dnn{slice_idx}`. The pattern is the
+analysis's choice — nothing here assumes the sliced axis is a DNN score.
+`common/tools.py:CategoryNaming` both writes those names and parses them back from that one
+pattern, so a datacard configuration reading these shapes lists the sliced names in
+`categories:` and repeats the same `category_pattern`, which is how the per-category limits
+group the slices of one base category back together.
 
-In the law chain the same block decides the graph: with no `binning:` block
-`HistRebinTask` drops out entirely and `CreateDatacardsTask` reads the merged histograms
-straight from the `Hists_merged` tree, since there is no step in between.
+**2. Limit-driven binning optimisation — `bin_opt/`.** A search harness, documented below:
+it builds candidate binnings, runs limits with combine for each, and ranks them. Its product
+is a `hist_bins` JSON, applied at datacard time by `dc_make/binner.py`. Every module is a
+script driven by `bin_opt/bin_optimization.yaml`, and it exposes no importable API.
+
+Which one an analysis is on is visible in its configuration: the `bin_opt` path sets
+`hist_bins` (as `config/x_hh_bbtautau_run2.yaml` does), while an analysis reading rebinned
+shapes leaves `hist_bins` unset and instead lists the sliced `categories:` and the
+`category_pattern` that names them (as HH→bbWW's `config/Datacards/x_hh_bbww_DL_run3.yaml`
+does). An analysis using neither simply lists the categories its input already has.
+
+`categories:` is always taken verbatim — it is the set of directories that exist in the
+input shapes, and nothing in `dc_make` derives or expands it.
 
 ## How to run binning optimisation on lxplus
 Open two separate LXPLUS terminals: one for **server side** and the other for **worker side**.

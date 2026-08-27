@@ -3,11 +3,11 @@ import luigi
 
 from FLAF.Analysis.tasks import HistPlotTask
 
-from .RebinningParamsTask import RebinningParamsTask
+from .StatInferenceTask import StatInferenceTask
 from .ResonantLimitsTask import ResonantLimitsTask
 
 
-class ResonantLimitsAndHistPlotTask(RebinningParamsTask):
+class ResonantLimitsAndHistPlotTask(StatInferenceTask):
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
     def get_eras(self):

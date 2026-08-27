@@ -8,20 +8,15 @@ import subprocess
 
 from dhi.tasks.resonant import MergeResonantLimits
 
-from .RebinningParamsTask import RebinningParamsTask
+from .StatInferenceTask import StatInferenceTask
 from .CreateDatacardsTask import CreateDatacardsTask
 
 
-class ResonantLimitsTask(RebinningParamsTask):
+class ResonantLimitsTask(StatInferenceTask):
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
     def store_parts(self):
-        return (
-            self.version,
-            self.__class__.__name__,
-            *self.binning_parts(),
-            "combined",
-        )
+        return (self.version, self.__class__.__name__, "combined")
 
     def get_eras(self):
         return self.get_top_level_eras()

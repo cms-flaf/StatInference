@@ -8,8 +8,6 @@ file beside this one that carries its name. law discovers tasks by walking
 
 from .StatInferenceTask import StatInferenceTask
 from .MergedHists import MergedHists
-from .RebinningParamsTask import BINNING_PARAMS, BINNING_DEFAULTS, RebinningParamsTask
-from .HistRebinTask import HistRebinTask
 from .CreateDatacardsTask import CreateDatacardsTask
 from .ResonantLimitsTask import ResonantLimitsTask
 from .PlotResonantLimitsTask import PlotResonantLimitsTask
@@ -18,10 +16,6 @@ from .ResonantLimitsAndHistPlotTask import ResonantLimitsAndHistPlotTask
 __all__ = [
     "StatInferenceTask",
     "MergedHists",
-    "BINNING_PARAMS",
-    "BINNING_DEFAULTS",
-    "RebinningParamsTask",
-    "HistRebinTask",
     "CreateDatacardsTask",
     "ResonantLimitsTask",
     "PlotResonantLimitsTask",

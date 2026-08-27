@@ -1,0 +1,55 @@
+# Binning for the 2D -> categorized-1D transformation, read by rebin_2d.py.
+#
+# This is HH->bbWW's set: x is the DNN score, cut into slices that become datacard
+# categories, and y is the HME mass estimate, rebinned into the bins of each slice.
+# rebin_2d.py names neither axis -- which variable sits on each is stated here.
+#
+# Naming rule below: no infix means the summed background, _each means per background,
+# _neff means effective MC entries rather than yield.
+
+# --- the sliced axis (x = DNN score) ---
+n_slices: 4
+# Names the categories the slicing produces, and labels the axis in each slice
+# directory's title. The datacard configuration reading these shapes must declare the
+# same category_pattern, since that is how it recovers a slice's base category.
+category_pattern: "{base_category}_dnn{slice_idx}"
+slice_var: DNN
+
+# A slice is only worth keeping if the background under it is both there and measured:
+# a floor on the summed yield, and one on its effective MC entries. Without the latter
+# the significance being maximised actively prefers a background that has fluctuated
+# low, since a smaller B raises the score.
+min_slice_bkg_sum: 1.0
+min_slice_bkg_neff: 4.0
+
+# The same two floors applied to each background separately rather than to the sum: a
+# background that has gone negative is invisible inside a healthy total. Over the 232
+# eE/muMu SR slices of Run3_Early the summed N_eff never once fell below 4, while DY
+# individually sat below it in 42% of them.
+#
+# The yield floor does the real work: it removes all 7 negative-background slices for
+# -0.16% of the total combined Asimov Z (39.103 -> 39.042). The N_eff one is left off --
+# requiring every background to be *measured* rather than merely positive costs 35% of
+# the Z in muMu/res2b at m500, whose signal-like region holds only N_eff 5.2 of DY in
+# total and cannot be split three ways above a threshold of 4.
+min_slice_bkg_each: 0.01
+min_slice_bkg_each_neff: 0.0
+
+# --- the rebinned axis (y = HME mass) ---
+max_bins_per_slice: 10
+# Aim for this much summed background per bin, which overrides max_bins_per_slice when
+# it binds. With the y bins ungated the median per-bin background N_eff was 2.8 and 63%
+# of fit bins sat below 4, and slices holding ~1.5 background events were still split
+# into 10 bins. Gating costs ~12% in mean expected limit (~20-25% above 800 GeV) -- that
+# is the optimistic bias the ungated binning was buying by placing edges on MC
+# fluctuations.
+bkg_per_bin: 5.0
+min_bin_bkg_each: 0.01
+min_bin_bkg_neff: 4.0
+
+# --- both axes ---
+# Backgrounds below this fraction of the category total are exempt from the per-process
+# floors, so a negligible process cannot veto every boundary.
+min_bkg_frac: 0.05
+min_signal: 0.5
+significance_mode: asimov

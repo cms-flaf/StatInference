@@ -6,11 +6,10 @@ import os
 from FLAF.RunKit.run_tools import ps_call
 from FLAF.run_tools.law_customizations import HTCondorWorkflow, copy_param
 
-from .RebinningParamsTask import RebinningParamsTask
-from .HistRebinTask import HistRebinTask
+from .StatInferenceTask import StatInferenceTask
 
 
-class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkflow):
+class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow):
     max_runtime = copy_param(HTCondorWorkflow.max_runtime, 2.0)
     n_cpus = copy_param(HTCondorWorkflow.n_cpus, 1)
 
@@ -19,9 +18,9 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
     # (Setup.getGlobal requires a real, known period; a meta-era name isn't one).
     meta_era = luigi.Parameter(default="")
 
-    # Stacked plots of the rebinned shapes going into the cards. This task is where they
-    # belong: it is the only one holding every sub-era's HistRebinTask output at once,
-    # which is what the merged shape (and hence each datacard bin) is built from.
+    # Stacked plots of the shapes going into the cards. This task is where they belong:
+    # it is the only one holding every sub-era's histograms at once, which is what the
+    # merged shape (and hence each datacard bin) is built from.
     make_plots = luigi.BoolParameter(default=True)
 
     @property
@@ -35,24 +34,19 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
         return self.get_era_groups().get(self.datacard_era, [self.period])
 
     def input_hist_reqs(self):
-        """{key: task} for the shapes the cards are built from.
+        """{key: task} for the shapes the cards are built from -- the merged histograms
+        of every sub-period of datacard_era.
 
-        With rebinning, that is one HistRebinTask per sub-period; without it (a
-        configuration whose input is already 1D and binned) the merged histograms are read
-        straight from the Hists_merged tree, since there is no step in between.
+        Whether those shapes were rebinned is not this task's business. A 2D->1D
+        rebinning is a standalone pre-step (StatInference/bin_opt_2d/rebin_2d.py) that
+        writes the same Hists_merged layout, so consuming its output is a matter of
+        pointing --hists-version at that production.
         """
-        if not self.rebinning_enabled():
-            return {
-                f"MergedHists_{era}_{variable}": req
-                for (era, variable), req in self.merged_hist_reqs(
-                    self.get_sub_periods()
-                ).items()
-            }
         return {
-            f"HistRebin_{e}": HistRebinTask.req(
-                self, period=e, meta_era=self.meta_era, branches=()
-            )
-            for e in self.get_sub_periods()
+            f"MergedHists_{era}_{variable}": req
+            for (era, variable), req in self.merged_hist_reqs(
+                self.get_sub_periods()
+            ).items()
         }
 
     def workflow_requires(self):
@@ -65,12 +59,10 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
         return {0: None}
 
     def output(self):
-        # fs_default, like HistRebinTask. Note that combine cannot read these directly:
+        # fs_default. Note that combine cannot read these directly:
         # ResonantLimitsTask mirrors them back to datacards_dir() before handing them to
         # dhi -- see ResonantLimitsTask.stage_datacards.
-        return self.output_dir_target(
-            self.version, "Datacards", *self.binning_parts(), self.datacard_era
-        )
+        return self.output_dir_target(self.version, "Datacards", self.datacard_era)
 
     def run(self):
         statInf_entry = self.global_params["StatInference"]
@@ -84,22 +76,12 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
             self.ana_path(), "StatInference", "dc_make", "create_datacards.py"
         )
         with contextlib.ExitStack() as stack:
-            if self.rebinning_enabled():
-                # HistRebinTask writes <era>/<variable>/<variable>.root under its own
-                # per-period directory, so its parent is already the base the config's
-                # input_file_pattern resolves against.
-                base_dir_local = stack.enter_context(
-                    self.input()[0].parent.localize("r")
-                )
-            else:
-                targets = {
-                    key: req.output()
-                    for key, req in self.merged_hist_reqs(
-                        self.get_sub_periods()
-                    ).items()
-                }
-                self.check_inputs(targets)
-                base_dir_local = stack.enter_context(self.stage_inputs(targets))
+            targets = {
+                key: req.output()
+                for key, req in self.merged_hist_reqs(self.get_sub_periods()).items()
+            }
+            self.check_inputs(targets)
+            base_dir_local = stack.enter_context(self.stage_inputs(targets))
             local_output = stack.enter_context(self.output().localize("w"))
             cmd = [
                 "python3",
@@ -113,14 +95,6 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
                 "--eras",
                 self.datacard_era,
             ]
-            if self.rebinning_enabled():
-                # The datacard bins are the sliced category names; the resolved values
-                # here are what HistRebinTask actually wrote, and must win over the
-                # config's own so the two cannot drift apart under a CLI override.
-                # Left unset otherwise, so the categories stay as the config lists them.
-                binning = self.binning_params()
-                cmd += ["--n-slices", str(binning["n_slices"])]
-                cmd += ["--category-pattern", binning["category_pattern"]]
             if hist_bins:
                 cmd += ["--hist-bins", hist_bins]
             if len(param_values) > 0:
@@ -165,13 +139,6 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
             # most of the background), so a linear axis hides everything but slice 0.
             "--log-y",
         ]
-        if self.rebinning_enabled():
-            # Same reason as create_datacards.py above: the panels are the sliced
-            # categories, so they must follow the values HistRebinTask actually used.
-            # Left unset otherwise, so the panels are the config's own categories.
-            binning = self.binning_params()
-            cmd += ["--n-slices", str(binning["n_slices"])]
-            cmd += ["--category-pattern", binning["category_pattern"]]
         try:
             ps_call(cmd, verbose=1)
         except Exception as e:

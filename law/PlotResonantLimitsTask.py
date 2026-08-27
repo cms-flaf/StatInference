@@ -16,11 +16,11 @@ from dhi.tasks.resonant import (
     PlotResonantLimits,
 )
 
-from .RebinningParamsTask import RebinningParamsTask
+from .StatInferenceTask import StatInferenceTask
 from .ResonantLimitsTask import ResonantLimitsTask
 
 
-class PlotResonantLimitsTask(RebinningParamsTask):
+class PlotResonantLimitsTask(StatInferenceTask):
     """The limit plots, declared in the datacard configuration.
 
     Each entry of the config's ``limit_plots`` block becomes one dhi
@@ -61,9 +61,9 @@ class PlotResonantLimitsTask(RebinningParamsTask):
         return [ResonantLimitsTask.req(self)]
 
     def output(self):
-        # fs_default, like HistRebinTask and CreateDatacardsTask. Holds one
+        # fs_default, like CreateDatacardsTask. Holds one
         # <era>/ sub-directory of plots plus plots.json naming them.
-        return self.output_dir_target(self.version, "LimitPlots", *self.binning_parts())
+        return self.output_dir_target(self.version, "LimitPlots")
 
     def _resolve_config_path(self, path):
         return path if os.path.isabs(path) else os.path.join(self.ana_path(), path)

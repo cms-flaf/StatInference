@@ -1,7 +1,7 @@
 """Stacked plots of the rebinned 1D shapes that actually enter the datacards.
 
 HistPlotTask plots the pre-rebinning histograms straight out of HistMergerTask, one
-era at a time. That is the wrong object to look at once HistRebinTask has sliced the
+era at a time. That is the wrong object to look at once a 2D->1D rebinning has sliced the
 2D plane into per-slice 1D shapes: what the fit sees is the
 *rebinned* shape, summed over the meta-era's sub-eras exactly as maker.py's
 getCombinedShape does at datacard-build time.
@@ -52,28 +52,19 @@ FALLBACK_COLORS = {
 FALLBACK_SIGNAL_COLOR = "kRed"
 
 
-def load_config(config_path, n_slices=None, category_pattern=None):
-    """Like hist_rebin_2d.load_config, but expands the base categories into the
-    *sliced* names -- those are the directories that exist in the rebinned files and
-    the ones that map onto datacard bins."""
+def load_config(config_path):
+    """The datacard configuration, reduced to what the plots need.
+
+    ``categories`` is taken verbatim: the configuration lists the names that exist as
+    directories in the input, which are the ones that map onto datacard bins. Same rule
+    as DatacardMaker, so the panels and the datacard bins cannot disagree.
+    """
     with open(config_path, "r") as f:
         cfg = yaml.safe_load(f)
 
-    # HistRebinTask's resolved value is authoritative when the caller passes it; a
-    # command-line override would otherwise leave this deriving a different slice count
-    # than the rebinned files contain. No slice count anywhere (or an explicit 0) means
-    # the input is already binned and its categories are the ones listed -- same rule as
-    # DatacardMaker, so the panels and the datacard bins cannot disagree.
-    n_slices = n_slices
-    if n_slices is None:
-        n_slices = (cfg.get("binning") or {}).get("n_slices")
-    # Same rule for the pattern naming those slices: the caller's resolved value wins,
-    # otherwise the configuration's own.
-    naming = (
-        CategoryNaming(category_pattern)
-        if category_pattern
-        else CategoryNaming.fromConfig(cfg)
-    )
+    # Only used to group slices under their base category, from the same pattern the
+    # datacard step reads.
+    naming = CategoryNaming.fromConfig(cfg)
 
     # multiple signal processes are allowed; each is drawn as its own stack entry
     signal_hist_names = []
@@ -100,11 +91,7 @@ def load_config(config_path, n_slices=None, category_pattern=None):
         "model": Model.fromConfig(cfg["model"]),
         "channels": cfg["channels"],
         "naming": naming,
-        "categories": (
-            naming.expand(cfg["categories"], int(n_slices))
-            if n_slices
-            else list(cfg["categories"])
-        ),
+        "categories": list(cfg["categories"]),
         "signal_hist_name_patterns": signal_hist_names,
         "signal_param_name": extractParameters(signal_hist_names[0])[0],
         "mass_values": mass_values,
@@ -272,7 +259,7 @@ def plot_channel_slice_grid(
             ax = axes[r][c]
             panel = panels[c] if c < len(panels) else None
             if panel is None:
-                # HistRebinTask produced no shapes here (e.g. a channel whose only
+                # The rebinning produced no shapes here (e.g. a channel whose only
                 # backgrounds are excluded). Blank the cell rather than closing the gap.
                 ax.set_axis_off()
                 continue
@@ -323,7 +310,7 @@ def sum_over_eras(files, hist_path):
 def build_category_panel(files, channel, category, cfg, mass, styles, era_label_cfg):
     """(hists, custom) for one slice, or None if the slice has no shapes.
 
-    A slice is missing whenever HistRebinTask skipped the whole base category for
+    A slice is missing whenever the rebinning skipped the whole base category for
     lack of discovery signal (e.g. boosted at MX=300)."""
     signal_keys = [
         applyParameters(pattern, {cfg["signal_param_name"]: mass})
@@ -370,7 +357,7 @@ def build_category_panel(files, channel, category, cfg, mass, styles, era_label_
 def slice_title(files, channel, category):
     """Panel title: the sliced category name plus the selection it stands for.
 
-    The selection is the slice directory's own title, set by hist_rebin_2d.py. Every era
+    The selection is the slice directory's own title, set by rebin_2d.py. Every era
     holds the same edges -- they are discovered once from the summed discovery eras -- so
     the first file carrying the slice wins. Input that was never sliced (a configuration
     with no `binning:` block) has no title of its own and simply carries no label.
@@ -381,7 +368,7 @@ def slice_title(files, channel, category):
         if not slice_dir:
             continue
         # ROOT defaults a directory's title to its own name, so only a title that
-        # differs from it is a selection hist_rebin_2d.py actually wrote.
+        # differs from it is a selection rebin_2d.py actually wrote.
         label = slice_dir.GetTitle()
         return f"{name}   {label}" if label and label != name else name
     return name
@@ -407,12 +394,10 @@ def run(
     signal_scale,
     log_y,
     masses=None,
-    n_slices=None,
-    category_pattern=None,
 ):
     from FLAF.PlotKit.config import PlotConfig
 
-    cfg = load_config(config_path, n_slices, category_pattern)
+    cfg = load_config(config_path)
     model = cfg["model"]
     mass_values = masses if masses else cfg["mass_values"]
 
@@ -485,7 +470,7 @@ def run(
                 rows.append((channel, panels))
 
             if not any(panel for _, panels in rows for panel in panels):
-                # HistRebinTask skipped this base category outright (e.g. boosted
+                # The rebinning skipped this base category outright (e.g. boosted
                 # at low MX): no slices exist in any channel, so there is nothing to draw.
                 n_skipped += 1
                 continue
@@ -556,24 +541,6 @@ if __name__ == "__main__":
         default=None,
         help="comma-separated subset of masses (default: all in the config)",
     )
-    parser.add_argument(
-        "--n-slices",
-        required=False,
-        type=int,
-        default=None,
-        help="slices each base category was cut into by HistRebinTask; defaults to "
-        "the config's binning block. Pass the value that task actually used, so the "
-        "panels match the input files",
-    )
-    parser.add_argument(
-        "--category-pattern",
-        required=False,
-        type=str,
-        default=None,
-        help="pattern HistRebinTask named those slices with; defaults to the config's "
-        "binning block. Pass the value that task actually used, so the panels carry the "
-        "names the input files do",
-    )
     args = parser.parse_args()
 
     try:
@@ -592,6 +559,4 @@ if __name__ == "__main__":
         signal_scale,
         args.log_y,
         masses=args.masses.split(",") if args.masses else None,
-        n_slices=args.n_slices,
-        category_pattern=args.category_pattern,
     )

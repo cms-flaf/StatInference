@@ -71,10 +71,15 @@ class CategoryNaming:
 
     @classmethod
     def fromConfig(cls, cfg):
-        """From a datacard configuration's ``binning:`` block, or the default pattern
-        when it declares none (or when there is no ``binning:`` block at all, i.e. the
-        input is already 1D and nothing was ever sliced)."""
-        return cls((cfg.get("binning") or {}).get("category_pattern"))
+        """From a datacard configuration's top-level ``category_pattern``, or the default
+        when it declares none -- a configuration whose categories were never sliced has
+        nothing to parse back, and any name is then its own base.
+
+        A configuration reading shapes from bin_opt_2d/rebin_2d.py must repeat the pattern
+        that run used, since that is the only way its sliced category names can be taken
+        apart again.
+        """
+        return cls(cfg.get("category_pattern"))
 
     def name(self, base_category, slice_idx):
         return self.pattern.format(base_category=base_category, slice_idx=slice_idx)
@@ -83,8 +88,8 @@ class CategoryNaming:
         """Base category names -> the per-slice names that exist in the rebinned files.
 
         Every consumer of the datacard configuration's ``categories`` list needs the same
-        expansion (maker.py's datacard bins, plot_rebinned.py's panels), and hist_rebin_2d.py
-        writes with the same pattern, so it is done in one place.
+        expansion, and bin_opt_2d/rebin_2d.py writes with the same pattern, so it is
+        done in one place.
         """
         return [
             self.name(base, idx) for base in base_categories for idx in range(n_slices)

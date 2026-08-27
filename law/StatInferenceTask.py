@@ -62,6 +62,18 @@ class StatInferenceTask(Task):
                 self._config_data = yaml.safe_load(f)
         return self._config_data
 
+    def store_parts(self):
+        return (self.version, self.__class__.__name__, self.period)
+
+    def datacards_dir(self, era):
+        """Local directory holding an era's datacards.
+
+        The cards are produced on fs_default but must be real local files by the time
+        combine sees them; ResonantLimitsTask mirrors them here and everything downstream
+        (dhi's --multi-datacards globbing, the overlay plots) resolves against this path.
+        """
+        return os.path.join(self.ana_data_path(), self.version, "Datacards", era)
+
     def get_era_groups(self):
         return self.get_config_data().get("era_groups", {})
 
@@ -107,8 +119,8 @@ class StatInferenceTask(Task):
 
     def get_required_variables(self):
         """The Hists_merged variables this chain reads: one per mass point (the 2D
-        histogram HistRebinTask slices, or an already-1D shape for a configuration that
-        does not rebin), derived from the datacard config's input_file_pattern.
+        shape the datacards are built from), derived from the datacard config's
+        input_file_pattern.
 
         This is the *complete* input list -- there is no intersection with global.yaml's
         histTuple_flavor variable list anywhere downstream, so a mass point present here
@@ -130,9 +142,7 @@ class StatInferenceTask(Task):
     def merged_hist_reqs(self, eras):
         """{(era, variable): MergedHists} -- every merged input file for those eras.
 
-        Shared by the two tasks that read Hists_merged: HistRebinTask (over its discovery
-        eras) and, for a configuration with no rebinning step, CreateDatacardsTask (over
-        its sub-periods).
+        Read by CreateDatacardsTask over the sub-periods of the era it builds cards for.
         """
         # Deferred: MergedHists subclasses this class, so importing it at module level
         # would be circular.
