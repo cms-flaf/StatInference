@@ -454,15 +454,8 @@ class DatacardMaker:
         combined_hist = None
 
         for sub_era in sub_eras:
-            sub_hist = self.getShape(
-                process,
-                sub_era,
-                channel,
-                category,
-                model_params,
-                unc_name,
-                unc_scale,
-                defer_negative_bin_check=True,
+            sub_hist = self._rawShape(
+                process, sub_era, channel, category, model_params, unc_name, unc_scale
             )
             if sub_hist is None:
                 continue
@@ -489,7 +482,7 @@ class DatacardMaker:
 
         return combined_hist
 
-    def getShape(
+    def _rawShape(
         self,
         process,
         era,
@@ -498,24 +491,16 @@ class DatacardMaker:
         model_params,
         unc_name=None,
         unc_scale=None,
-        defer_negative_bin_check=False,
     ):
-        """One process's shape in one bin.
+        """One process's shape in one bin, as read, with no negative-bin validation.
 
-        `defer_negative_bin_check` exists for exactly one caller: getCombinedShape(), which
-        fetches each sub-era of a meta-era and validates only their sum. A sub-era can dip
-        negative on its own statistics while the combined shape -- the one that actually
-        enters the datacard -- is fine, so checking it per sub-era would reject shapes that
-        are perfectly good. It is part of the cache key because validation rebalances the
-        histogram in place, so the checked and unchecked forms are genuinely different
-        objects.
+        Separate from getShape() for getCombinedShape()'s sake: a meta-era's sub-eras are
+        summed before anything is checked, because a sub-era can dip negative on its own
+        statistics while the combined shape -- the one that actually enters the datacard --
+        is fine. Validating per sub-era would reject shapes that are good, and would also
+        change them: resolveNegativeBins rebalances in place, so clamping each sub-era and
+        then summing does not give the same shape as summing and then clamping.
         """
-        # Handle meta-eras by combining sub-era shapes
-        if self.isMetaEra(era):
-            return self.getCombinedShape(
-                process, era, channel, category, model_params, unc_name, unc_scale
-            )
-
         file_name, file = self.getInputFile(era, model_params)
         key = (
             file_name,
@@ -525,7 +510,6 @@ class DatacardMaker:
             category,
             unc_name,
             unc_scale,
-            defer_negative_bin_check,
         )
 
         if key not in self.shapes:
@@ -537,13 +521,13 @@ class DatacardMaker:
                     if bkg_proc.is_background:
                         if not self.processInBin(bkg_proc.name, channel, category):
                             continue
+                        # Validated, not raw: asimov data is the sum of the
+                        # per-process shapes as they enter the fit, each resolved
+                        # under its own tolerance, never raw shapes summed and then
+                        # checked under data_obs's own (untolerant) settings. The
+                        # meta-era branch of getCombinedShape mirrors this.
                         bkg_hist = self.getShape(
-                            bkg_proc,
-                            era,
-                            channel,
-                            category,
-                            model_params,
-                            defer_negative_bin_check=defer_negative_bin_check,
+                            bkg_proc, era, channel, category, model_params
                         )
                         if hist is None:
                             hist = bkg_hist.Clone()
@@ -608,17 +592,71 @@ class DatacardMaker:
                         ),
                     )
                     self.signal_hists_by_key.setdefault(key_sig, []).append(hist)
-                elif not defer_negative_bin_check:
-                    self.resolveOrRaiseNegativeBins(
-                        hist,
-                        process,
-                        era,
-                        channel,
-                        category,
-                        model_params,
-                        unc_name,
-                        unc_scale,
-                    )
+            self.shapes[key] = hist
+        return self.shapes[key]
+
+    def _isUnvalidatedSignal(self, process, unc_name, unc_scale):
+        """Whether this is a nominal signal shape, which is never negative-bin checked.
+
+        Those are collected into signal_hists_by_key to define the relevant (signal
+        carrying) bins that the check itself consults, so they are the input to the rule
+        rather than subject to it.
+        """
+        return process.is_signal and not (unc_name and unc_scale)
+
+    def getShape(
+        self,
+        process,
+        era,
+        channel,
+        category,
+        model_params,
+        unc_name=None,
+        unc_scale=None,
+    ):
+        """One process's shape in one bin, negative-bin validated -- what a datacard bin
+        is built from.
+
+        A meta-era is summed from its sub-eras first (getCombinedShape), which validates
+        the sum rather than the parts; see _rawShape() for why.
+        """
+        if self.isMetaEra(era):
+            return self.getCombinedShape(
+                process, era, channel, category, model_params, unc_name, unc_scale
+            )
+
+        raw = self._rawShape(
+            process, era, channel, category, model_params, unc_name, unc_scale
+        )
+        if raw is None or self._isUnvalidatedSignal(process, unc_name, unc_scale):
+            return raw
+
+        # Cached separately from the raw form, and validated on a copy: the check
+        # rebalances in place, and the raw shape is still needed unmodified by
+        # getCombinedShape, which sums the sub-eras before checking anything.
+        key = (
+            self.model.getInputFileName(era, model_params),
+            process.name,
+            era,
+            channel,
+            category,
+            unc_name,
+            unc_scale,
+            "validated",
+        )
+        if key not in self.shapes:
+            hist = raw.Clone()
+            hist.SetDirectory(0)
+            self.resolveOrRaiseNegativeBins(
+                hist,
+                process,
+                era,
+                channel,
+                category,
+                model_params,
+                unc_name,
+                unc_scale,
+            )
             self.shapes[key] = hist
         return self.shapes[key]
 
