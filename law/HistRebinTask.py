@@ -23,7 +23,7 @@ class HistRebinTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkflow):
     meta_era = luigi.Parameter(default="")
 
     def get_discovery_eras(self):
-        """Real eras summed together to discover DNN/HME bin edges: self.meta_era's
+        """Real eras summed together to discover the bin edges: self.meta_era's
         sub-eras if set, otherwise just [self.period] (self.period's own stats)."""
         if self.meta_era:
             return self.get_era_groups()[self.meta_era]

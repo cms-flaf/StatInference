@@ -10,20 +10,20 @@ from .StatInferenceTask import StatInferenceTask
 # are propagated down the chain, read from the datacard configuration's `binning:` block,
 # and hashed into the output path -- see RebinningParamsTask.binning_parts().
 BINNING_PARAMS = (
-    "n_dnn_slices",
+    "n_slices",
     "category_pattern",
     "slice_var",
-    "max_mass_bins",
-    "min_dnn_bkg_sum",
-    "min_mass_bkg_each",
+    "max_bins_per_slice",
+    "min_slice_bkg_sum",
+    "min_bin_bkg_each",
     "min_signal",
-    "min_bkg_neff",
+    "min_slice_bkg_neff",
     "min_bkg_frac",
-    "min_mass_bkg_neff",
-    "bkg_per_mass_bin",
+    "min_bin_bkg_neff",
+    "bkg_per_bin",
     "significance_mode",
-    "min_dnn_bkg_each",
-    "min_dnn_bkg_neff",
+    "min_slice_bkg_each",
+    "min_slice_bkg_each_neff",
 )
 
 # Fallbacks for a configuration that declares no `binning:` block. The values that matter
@@ -32,22 +32,22 @@ BINNING_PARAMS = (
 # datacard configuration should state its own -- see the annotated block in
 # config/Datacards/x_hh_bbww_DL_run3.yaml for what the production numbers are and why.
 BINNING_DEFAULTS = {
-    "n_dnn_slices": 4,
+    "n_slices": 4,
     # Neutral by default: the sliced axis is whatever the analysis put on the 2D x axis,
     # and an analysis that wants its own name for it says so in its `binning:` block.
     "category_pattern": CategoryNaming.default_pattern,
     "slice_var": "x",
-    "max_mass_bins": 10,
-    "min_dnn_bkg_sum": 1.0,
-    "min_mass_bkg_each": 0.01,
+    "max_bins_per_slice": 10,
+    "min_slice_bkg_sum": 1.0,
+    "min_bin_bkg_each": 0.01,
     "min_signal": 0.5,
-    "min_bkg_neff": 4.0,
+    "min_slice_bkg_neff": 4.0,
     "min_bkg_frac": 0.05,
-    "min_mass_bkg_neff": 4.0,
-    "bkg_per_mass_bin": 5.0,
+    "min_bin_bkg_neff": 4.0,
+    "bkg_per_bin": 5.0,
     "significance_mode": "asimov",
-    "min_dnn_bkg_each": 0.01,
-    "min_dnn_bkg_neff": 0.0,
+    "min_slice_bkg_each": 0.01,
+    "min_slice_bkg_each_neff": 0.0,
 }
 
 
@@ -65,20 +65,20 @@ class RebinningParamsTask(StatInferenceTask):
     # rather than plain Int/Float/Parameter is required, not cosmetic: luigi serialises a
     # plain FloatParameter's None to the string "None" and then raises on float("None")
     # whenever it round-trips the task through to_str_params()/from_str_params().
-    n_dnn_slices = luigi.OptionalIntParameter(default=None)
+    n_slices = luigi.OptionalIntParameter(default=None)
     category_pattern = luigi.OptionalParameter(default=None)
     slice_var = luigi.OptionalParameter(default=None)
-    max_mass_bins = luigi.OptionalIntParameter(default=None)
-    min_dnn_bkg_sum = luigi.OptionalFloatParameter(default=None)
-    min_mass_bkg_each = luigi.OptionalFloatParameter(default=None)
+    max_bins_per_slice = luigi.OptionalIntParameter(default=None)
+    min_slice_bkg_sum = luigi.OptionalFloatParameter(default=None)
+    min_bin_bkg_each = luigi.OptionalFloatParameter(default=None)
     min_signal = luigi.OptionalFloatParameter(default=None)
-    min_bkg_neff = luigi.OptionalFloatParameter(default=None)
+    min_slice_bkg_neff = luigi.OptionalFloatParameter(default=None)
     min_bkg_frac = luigi.OptionalFloatParameter(default=None)
-    min_mass_bkg_neff = luigi.OptionalFloatParameter(default=None)
-    bkg_per_mass_bin = luigi.OptionalFloatParameter(default=None)
+    min_bin_bkg_neff = luigi.OptionalFloatParameter(default=None)
+    bkg_per_bin = luigi.OptionalFloatParameter(default=None)
     significance_mode = luigi.OptionalParameter(default=None)
-    min_dnn_bkg_each = luigi.OptionalFloatParameter(default=None)
-    min_dnn_bkg_neff = luigi.OptionalFloatParameter(default=None)
+    min_slice_bkg_each = luigi.OptionalFloatParameter(default=None)
+    min_slice_bkg_each_neff = luigi.OptionalFloatParameter(default=None)
 
     def rebinning_enabled(self):
         """Whether the configuration asks for the in-chain 2D->1D rebinning step.

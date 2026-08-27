@@ -50,7 +50,7 @@ class Process:
         """Whether this process contributes to `category`. Empty list = all of them.
 
         Entries match as prefixes of the datacard category name, so "SR/boosted"
-        covers SR/boosted_dnn0..3 without listing the slices: how many DNN slices
+        covers SR/boosted_dnn0..3 without listing the slices: how many slices
         a category is cut into is a binning parameter, and the process list should
         not have to change when it does.
         """

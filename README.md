@@ -31,10 +31,10 @@ while the `bin_opt` path sets `hist_bins` and has no `binning:` block (as
 `config/x_hh_bbtautau_run2.yaml` does).
 
 That difference is also what decides how `categories:` is read. With a `binning:` block
-(or an explicit `--n-dnn-slices`), `dc_make` expands the listed base categories into the
+(or an explicit `--n-slices`), `dc_make` expands the listed base categories into the
 sliced names above, because those are the directories `HistRebinTask` wrote. Without one,
 the categories are used exactly as listed — which is what an input file that is already
-1D and binned contains. Pass `--n-dnn-slices 0` to force the latter for a configuration
+1D and binned contains. Pass `--n-slices 0` to force the latter for a configuration
 that does carry a `binning:` block.
 
 In the law chain the same block decides the graph: with no `binning:` block

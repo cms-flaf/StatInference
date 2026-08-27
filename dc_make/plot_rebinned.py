@@ -2,7 +2,7 @@
 
 HistPlotTask plots the pre-rebinning histograms straight out of HistMergerTask, one
 era at a time. That is the wrong object to look at once HistRebinTask has sliced the
-2D (DNN x HME) plane into per-DNN-slice 1D mass shapes: what the fit sees is the
+2D plane into per-slice 1D shapes: what the fit sees is the
 *rebinned* shape, summed over the meta-era's sub-eras exactly as maker.py's
 getCombinedShape does at datacard-build time.
 
@@ -11,7 +11,7 @@ config/plot/*.yaml style files, same signal-overlay convention) but takes the
 rebinned files as input and sums the sub-eras first, so every panel corresponds
 one-to-one with a datacard bin block.
 
-One file per base category and mass, laid out as a grid: DNN slices across,
+One file per base category and mass, laid out as a grid: slices across,
 lepton channels down. The fit sees these bins together, so they are easier to judge
 together -- a slice that looks reasonable in eMu and pathological in eE is obvious
 side by side and invisible in separate files.
@@ -52,7 +52,7 @@ FALLBACK_COLORS = {
 FALLBACK_SIGNAL_COLOR = "kRed"
 
 
-def load_config(config_path, n_dnn_slices=None, category_pattern=None):
+def load_config(config_path, n_slices=None, category_pattern=None):
     """Like hist_rebin_2d.load_config, but expands the base categories into the
     *sliced* names -- those are the directories that exist in the rebinned files and
     the ones that map onto datacard bins."""
@@ -64,9 +64,9 @@ def load_config(config_path, n_dnn_slices=None, category_pattern=None):
     # than the rebinned files contain. No slice count anywhere (or an explicit 0) means
     # the input is already binned and its categories are the ones listed -- same rule as
     # DatacardMaker, so the panels and the datacard bins cannot disagree.
-    n_slices = n_dnn_slices
+    n_slices = n_slices
     if n_slices is None:
-        n_slices = (cfg.get("binning") or {}).get("n_dnn_slices")
+        n_slices = (cfg.get("binning") or {}).get("n_slices")
     # Same rule for the pattern naming those slices: the caller's resolved value wins,
     # otherwise the configuration's own.
     naming = (
@@ -142,6 +142,29 @@ def get_process_styles(ana_path, period, version, process_names):
     return styles
 
 
+def get_rebinned_axis_title(ana_path, period, version, variable):
+    """Axis title for the surviving 1D axis, taken from the analysis's own plot config.
+
+    The rebinned shapes are the y projection of the 2D `variable`, and histograms.yaml
+    already describes both of its axes: the 2D entry's ``var_list`` is [x, y], and the y
+    variable's own entry carries the ``x_title`` HistPlotTask draws it with. Reading it
+    from there keeps this script free of any one analysis's axis label and keeps the
+    rebinned plots labelled exactly like the pre-rebinning ones.
+
+    Falls back to the variable's own name rather than a guess -- a plot with a plain
+    label is a cosmetic problem, and inventing one would be a wrong one.
+    """
+    try:
+        import FLAF.Common.Setup as Setup
+
+        hists = Setup.Setup(ana_path, period, version).hists
+        y_var = hists[variable]["var_list"][1]
+        return hists[y_var]["x_title"]
+    except Exception as e:
+        print(f"Warning: no axis title for {variable} ({e}); using the variable name")
+        return variable
+
+
 def build_hist_cfg(x_title, y_title, log_y):
     """PlotKit reads binning/axis metadata out of histograms.yaml keyed by variable
     name. The rebinned axis is a bin index with no config entry (and needs none --
@@ -163,7 +186,7 @@ class PanelBackend:
     """Draws a PlotKit StackSpec into an axes we already own.
 
     PlotKit's MplhepBackend makes its own figure in _new_figure() and saves it in
-    render_stacked(). Swapping just those two things out lets every DNN slice share
+    render_stacked(). Swapping just those two things out lets every slice share
     one canvas while the drawing code -- and therefore the styling -- stays exactly
     the one HistPlotTask uses.
     """
@@ -215,10 +238,10 @@ def plot_channel_slice_grid(
     signal_scale,
     title,
 ):
-    """One figure per base category: DNN slices across, lepton channels down.
+    """One figure per base category: slices across, lepton channels down.
 
     `rows` is [(channel, [panel or None, ...]), ...], each list holding one entry per
-    DNN slice in slice order. A missing slice keeps its column slot as None instead of
+    slice in slice order. A missing slice keeps its column slot as None instead of
     shifting the row left -- dnn0 has to sit above dnn0 across channels, since making
     the columns comparable is the whole reason for sharing a canvas.
 
@@ -298,7 +321,7 @@ def sum_over_eras(files, hist_path):
 
 
 def build_category_panel(files, channel, category, cfg, mass, styles, era_label_cfg):
-    """(hists, custom) for one DNN slice, or None if the slice has no shapes.
+    """(hists, custom) for one slice, or None if the slice has no shapes.
 
     A slice is missing whenever HistRebinTask skipped the whole base category for
     lack of discovery signal (e.g. boosted at MX=300)."""
@@ -345,7 +368,7 @@ def build_category_panel(files, channel, category, cfg, mass, styles, era_label_
 
 
 def slice_title(files, channel, category):
-    """Panel title: the sliced category name plus the DNN selection it stands for.
+    """Panel title: the sliced category name plus the selection it stands for.
 
     The selection is the slice directory's own title, set by hist_rebin_2d.py. Every era
     holds the same edges -- they are discovered once from the summed discovery eras -- so
@@ -384,12 +407,12 @@ def run(
     signal_scale,
     log_y,
     masses=None,
-    n_dnn_slices=None,
+    n_slices=None,
     category_pattern=None,
 ):
     from FLAF.PlotKit.config import PlotConfig
 
-    cfg = load_config(config_path, n_dnn_slices, category_pattern)
+    cfg = load_config(config_path, n_slices, category_pattern)
     model = cfg["model"]
     mass_values = masses if masses else cfg["mass_values"]
 
@@ -409,8 +432,16 @@ def run(
     ]
     styles = get_process_styles(ana_path, eras[0], version, process_names)
 
+    # Every mass point's 2D variable projects onto the same y axis, so one lookup does
+    # for all of them; getInputFileName() lays the tree out as "<era>/<variable>/...".
+    first_rel = model.getInputFileName(
+        eras[0], {cfg["signal_param_name"]: mass_values[0]}
+    )
+    variable = os.path.basename(os.path.dirname(first_rel))
     hist_cfg = build_hist_cfg(
-        x_title="m_{X}^{HME} (GeV)", y_title="Events", log_y=log_y
+        x_title=get_rebinned_axis_title(ana_path, eras[0], version, variable),
+        y_title="Events",
+        log_y=log_y,
     )
     plotter_cfg = PlotConfig(page_cfg, page_cfg_custom, hist_cfg)
     groups = group_categories_by_base(cfg["categories"], cfg["naming"])
@@ -430,7 +461,7 @@ def run(
             files.append(f)
 
         for base_cat, slice_cats in groups.items():
-            # All lepton channels of a base category share one canvas, so the DNN
+            # All lepton channels of a base category share one canvas, so the
             # slices can be compared across channels at a glance instead of by
             # flipping between files.
             rows = []
@@ -526,11 +557,11 @@ if __name__ == "__main__":
         help="comma-separated subset of masses (default: all in the config)",
     )
     parser.add_argument(
-        "--n-dnn-slices",
+        "--n-slices",
         required=False,
         type=int,
         default=None,
-        help="DNN slices each base category was cut into by HistRebinTask; defaults to "
+        help="slices each base category was cut into by HistRebinTask; defaults to "
         "the config's binning block. Pass the value that task actually used, so the "
         "panels match the input files",
     )
@@ -561,6 +592,6 @@ if __name__ == "__main__":
         signal_scale,
         args.log_y,
         masses=args.masses.split(",") if args.masses else None,
-        n_dnn_slices=args.n_dnn_slices,
+        n_slices=args.n_slices,
         category_pattern=args.category_pattern,
     )

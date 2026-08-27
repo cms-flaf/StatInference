@@ -119,7 +119,7 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
                 # config's own so the two cannot drift apart under a CLI override.
                 # Left unset otherwise, so the categories stay as the config lists them.
                 binning = self.binning_params()
-                cmd += ["--n-dnn-slices", str(binning["n_dnn_slices"])]
+                cmd += ["--n-slices", str(binning["n_slices"])]
                 cmd += ["--category-pattern", binning["category_pattern"]]
             if hist_bins:
                 cmd += ["--hist-bins", hist_bins]
@@ -161,7 +161,7 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
             self.version,
             "--signal-scale",
             str(self.global_params.get("signal_plot_scale", "bkg")),
-            # The DNN slices span ~5 decades in yield (the low-significance slice holds
+            # The slices span ~5 decades in yield (the low-significance slice holds
             # most of the background), so a linear axis hides everything but slice 0.
             "--log-y",
         ]
@@ -170,7 +170,7 @@ class CreateDatacardsTask(RebinningParamsTask, HTCondorWorkflow, law.LocalWorkfl
             # categories, so they must follow the values HistRebinTask actually used.
             # Left unset otherwise, so the panels are the config's own categories.
             binning = self.binning_params()
-            cmd += ["--n-dnn-slices", str(binning["n_dnn_slices"])]
+            cmd += ["--n-slices", str(binning["n_slices"])]
             cmd += ["--category-pattern", binning["category_pattern"]]
         try:
             ps_call(cmd, verbose=1)

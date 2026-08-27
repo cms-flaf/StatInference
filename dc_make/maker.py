@@ -37,7 +37,7 @@ class DatacardMaker:
         input_path,
         hist_bins=None,
         param_values=None,
-        n_dnn_slices=None,
+        n_slices=None,
         category_pattern=None,
         **kwargs,
     ):
@@ -64,8 +64,8 @@ class DatacardMaker:
         self.eras = cfg["eras"]
         self.channels = cfg["channels"]
         # For input produced by HistRebinTask the configuration lists base categories
-        # ("SR/res2b") while the datacard bins are the per-DNN-slice names it wrote.
-        # n_dnn_slices comes from the caller when given -- HistRebinTask's resolved value
+        # ("SR/res2b") while the datacard bins are the per-slice names it wrote.
+        # n_slices comes from the caller when given -- HistRebinTask's resolved value
         # is authoritative, since a command-line override would otherwise leave this
         # deriving a different slice count than the rebinned files contain.
         #
@@ -73,9 +73,9 @@ class DatacardMaker:
         # input did not come from HistRebinTask -- it is already binned, and its
         # categories are exactly the ones the configuration lists. An explicit 0 says the
         # same for a configuration that does carry a `binning:` block.
-        n_slices = n_dnn_slices
+        n_slices = n_slices
         if n_slices is None:
-            n_slices = (cfg.get("binning") or {}).get("n_dnn_slices")
+            n_slices = (cfg.get("binning") or {}).get("n_slices")
         # Same rule for the pattern that names those slices: the caller's resolved value
         # wins, otherwise the configuration's own.
         self.naming = (
@@ -1083,7 +1083,7 @@ class DatacardMaker:
                         param_list
                     ).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
 
-                # Same breakdown by base category (all its DNN slices, all channels),
+                # Same breakdown by base category (all its slices, all channels),
                 # for per-category limits alongside the per-channel ones.
                 for base_cat, slice_cats in self.getCategoryGroups().items():
                     bin_names = [

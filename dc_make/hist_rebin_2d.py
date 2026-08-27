@@ -32,7 +32,7 @@ def load_config(config_path):
 
     # Several processes may carry is_signal (e.g. the bbWW(2l) and bbtautau decay
     # modes of the same resonance, both scaled by the same signal strength). They
-    # are summed to form the discovery signal that steers the DNN slice
+    # are summed to form the discovery signal that steers the slice
     # boundaries, so the binning is optimised for the total signal in the fit.
     signal_hist_names = []
     mass_values = None
@@ -193,7 +193,7 @@ def asimov_significance(s, b, b_err=0.0):
 
 
 def significance(s, b, b_err=0.0, mode="sb"):
-    """Figure of merit steering the DNN slice boundaries.
+    """Figure of merit steering the slice boundaries.
 
     mode="sb":     S / sqrt(B + sigma_B^2). Folding sigma_B into plain S/sqrt(B)
                    stops a downward fluctuation of a statistics-starved background
@@ -212,7 +212,7 @@ def significance(s, b, b_err=0.0, mode="sb"):
     return s / (denominator**0.5)
 
 
-def _dnn_passes(
+def _slice_passes(
     yields,
     min_sum,
     total_error=None,
@@ -222,11 +222,11 @@ def _dnn_passes(
     min_proc_neff=0.0,
     exempt=(),
 ):
-    """DNN-slice validity: the summed background must clear min_sum, and be known
+    """Slice validity: the summed background must clear min_sum, and be known
     to better than min_neff effective MC entries -- a window whose background is
     statistically undetermined must not be selectable at all.
 
-    The per-process arms (min_each, min_proc_neff) are what _mass_passes already
+    The per-process arms (min_each, min_proc_neff) are what _bin_passes already
     does on the mass axis, applied here as well. Testing only the sum hides an
     individual background that has fluctuated negative behind a large, well
     measured neighbour: muMu/SR/res2b at m500 selected a slice holding
@@ -238,7 +238,7 @@ def _dnn_passes(
     which a downward fluctuation *increases* by lowering B, so such a window is
     mildly preferred rather than merely tolerated.
 
-    `exempt` comes from minor_backgrounds() judged over the whole DNN range of the
+    `exempt` comes from minor_backgrounds() judged over the whole sliced-axis range of the
     category, never over the candidate window: a background that is negligible in
     this category must not be able to veto every boundary, and judging it inside
     the window under test is circular (a background that is exactly zero there is
@@ -282,7 +282,7 @@ def minor_backgrounds(bkg_hists_by_name, lo, hi, min_frac):
     return {name for name, value in yields.items() if value < min_frac * total}
 
 
-def _mass_passes(yields, min_each, exempt=(), total_error=None, min_neff=0.0):
+def _bin_passes(yields, min_each, exempt=(), total_error=None, min_neff=0.0):
     """Mass-bin validity: every *relevant* background must exceed min_each, and
     (when min_neff > 0) the summed background must be known to at least min_neff
     effective MC entries.
@@ -290,11 +290,11 @@ def _mass_passes(yields, min_each, exempt=(), total_error=None, min_neff=0.0):
     `exempt` is the set of backgrounds judged negligible across the whole slice by
     minor_backgrounds(); they are excused from min_each so that a process worth
     0.4% of the yield -- and known only to a few hundred percent -- cannot veto
-    every candidate split, which would make find_mass_bins() back off all the way
+    every candidate split, which would make find_bins() back off all the way
     to a single bin and discard the mass shape in exactly the high-significance
     slices that matter most.
 
-    The min_neff arm is the same gate _dnn_passes() applies to slice boundaries.
+    The min_neff arm is the same gate _slice_passes() applies to slice boundaries.
     Applying it only there left the mass bins *inside* each slice ungated, and
     since that is where essentially every fit bin lives, the median per-bin
     effective background count came out at ~2.8 against a slice threshold of 4.
@@ -313,7 +313,7 @@ def _mass_passes(yields, min_each, exempt=(), total_error=None, min_neff=0.0):
     return True
 
 
-def grow_dnn_slice(
+def grow_slice(
     sig_hist,
     bkg_hists_by_name,
     right,
@@ -338,7 +338,7 @@ def grow_dnn_slice(
         bkg_e = (
             _bkg_errors(bkg_hists_by_name, left, right) if min_proc_neff > 0 else None
         )
-        if not _dnn_passes(
+        if not _slice_passes(
             bkg_y,
             min_sum,
             b_err,
@@ -358,7 +358,7 @@ def grow_dnn_slice(
     return best_left if best_left is not None else first_bin
 
 
-def find_dnn_slices(
+def find_slices(
     sig_hist,
     bkg_hists_by_name,
     n_slices,
@@ -378,7 +378,7 @@ def find_dnn_slices(
 
     Which backgrounds are minor enough to be exempt from the per-process floors is
     decided once here, over the whole [first_bin, last_bin] range, and held fixed
-    for every candidate window -- see _dnn_passes on why it cannot be re-judged
+    for every candidate window -- see _slice_passes on why it cannot be re-judged
     per window.
     """
     exempt = (
@@ -394,7 +394,7 @@ def find_dnn_slices(
             slices.append((lo, right if right >= lo else lo))
             right = lo - 1
             continue
-        left = grow_dnn_slice(
+        left = grow_slice(
             sig_hist,
             bkg_hists_by_name,
             right,
@@ -416,10 +416,10 @@ def signal_quantile_ranges(sig_hist, n_bins, first_bin, last_bin):
     """Split [first_bin, last_bin] into `n_bins` ranges each holding an equal share
     of the signal.
 
-    This is what puts the bins where the resonance is. The HME axis is 0-1500 GeV
-    for every mass point, so the signal occupies a narrow window whose position
-    moves with MX while the axis does not; binning must follow the signal rather
-    than the axis. Equal-signal quantiles do that automatically -- bin edges
+    This is what puts the bins where the resonance is. The axis is the same range at
+    every mass point (bbWW's HME runs 0-1500 GeV), so the signal occupies a narrow
+    window whose position moves with MX while the axis does not; binning must follow
+    the signal rather than the axis. Equal-signal quantiles do that automatically -- bin edges
     cluster wherever dS/dm is large (the peak) and a single wide bin absorbs the
     long empty stretches on either side.
 
@@ -471,7 +471,7 @@ def merge_until_valid(
     while len(ranges) > 1:
         bad = None
         for i, (lo, hi) in enumerate(ranges):
-            if not _mass_passes(
+            if not _bin_passes(
                 _bkg_yields(bkg_hists_by_name, lo, hi),
                 min_each,
                 exempt,
@@ -495,7 +495,7 @@ def merge_until_valid(
     return ranges
 
 
-def find_mass_bins(
+def find_bins(
     sig_hist,
     bkg_hists_by_name,
     max_bins,
@@ -505,15 +505,17 @@ def find_mass_bins(
     min_frac=0.0,
     min_neff=0.0,
 ):
-    """Mass bins inside one DNN slice: signal quantiles for the edges, background
-    gates for the count.
+    """Bins inside one slice: signal quantiles for the edges, background gates for
+    the count.
 
-    The previous version scanned right-to-left growing each bin leftward until the
-    backgrounds cleared their floors, mirroring find_dnn_slices(). That is right
-    for the DNN axis (signal-like = high score, so resolution belongs at the top)
-    and wrong for HME, where the signal sits at HME ~ MX and both tails are empty.
+    The two axes need opposite rules, which is why this is not find_slices(). The
+    previous version scanned right-to-left growing each bin leftward until the
+    backgrounds cleared their floors, mirroring find_slices(). That is right for the
+    sliced axis, where the signal piles up at one end so resolution belongs there, and
+    wrong for an axis whose signal sits in the middle with both tails empty -- as
+    bbWW's HME does, peaking at HME ~ MX.
     Starting from the top of the axis spent the bin budget on the empty
-    high-HME tail and left the entire resonance peak in the single leftover bin:
+    upper tail and left the entire resonance peak in the single leftover bin:
     at MX=600 in muMu/res2b_dnn3, one bin covered 0-710 GeV holding 97.5% of the
     signal while five bins shared the 710-1500 GeV region holding 2.5%. The fit
     then had no shape to work with in the only region where signal and background
@@ -536,65 +538,65 @@ def extend_outer_edges(ranges, full_lo, full_hi):
     return ranges
 
 
-def mass_bin_budget(bkg_hists_by_name, lo, hi, max_mass_bins, bkg_per_mass_bin):
-    """How many mass bins this DNN slice can actually afford.
+def bin_budget(bkg_hists_by_name, lo, hi, max_bins_per_slice, bkg_per_bin):
+    """How many bins this slice can actually afford.
 
-    A fixed max_mass_bins is applied blind to slice content: the high-mass boosted
+    A fixed max_bins_per_slice is applied blind to slice content: the high-mass boosted
     slices hold ~1.5 total background events and were still being split into 10
-    bins, i.e. ~0.15 events per bin. Capping at B_slice / bkg_per_mass_bin ties the
-    binning to the statistics that are really there. Returns max_mass_bins
-    unchanged when bkg_per_mass_bin <= 0 (feature off).
+    bins, i.e. ~0.15 events per bin. Capping at B_slice / bkg_per_bin ties the
+    binning to the statistics that are really there. Returns max_bins_per_slice
+    unchanged when bkg_per_bin <= 0 (feature off).
     """
-    if bkg_per_mass_bin <= 0:
-        return max_mass_bins
+    if bkg_per_bin <= 0:
+        return max_bins_per_slice
     total = sum(_bkg_yields(bkg_hists_by_name, lo, hi).values())
     if total <= 0:
         return 1
-    return max(1, min(max_mass_bins, int(total / bkg_per_mass_bin)))
+    return max(1, min(max_bins_per_slice, int(total / bkg_per_bin)))
 
 
 def discover_binning(
     sig2d,
     bkg2d_by_name,
-    n_dnn_slices,
-    max_mass_bins,
-    min_dnn_sum,
-    min_mass_each,
-    min_bkg_neff=0.0,
+    n_slices,
+    max_bins_per_slice,
+    min_slice_sum,
+    min_bin_each,
+    min_slice_bkg_neff=0.0,
     min_bkg_frac=0.0,
-    min_mass_bkg_neff=0.0,
-    bkg_per_mass_bin=0.0,
+    min_bin_bkg_neff=0.0,
+    bkg_per_bin=0.0,
     sig_mode="sb",
-    min_dnn_bkg_each=0.0,
-    min_dnn_bkg_neff=0.0,
+    min_slice_bkg_each=0.0,
+    min_slice_bkg_each_neff=0.0,
 ):
     """bkg2d_by_name: {background_name: [hist per discovery era, ...]}. The list
     is usually a single era's own histogram (standalone limit) or all of a
     meta-era's sub-eras (combined limit) -- see HistRebinTask.get_discovery_eras().
     Yields are summed across whatever's in the list; see _bkg_yields(). sig2d is
     the same discovery reference's (already-summed) signal histogram: its x
-    projection picks the significance-maximizing DNN slice boundaries, and its y
+    projection picks the significance-maximizing slice boundaries, and its y
     projection within each slice places the mass bin edges by signal quantile."""
     any_hist = next(iter(bkg2d_by_name.values()))[0]
     nx = any_hist.GetNbinsX()
     ny = any_hist.GetNbinsY()
-    dnn_slices = find_dnn_slices(
+    slices = find_slices(
         sig2d,
         bkg2d_by_name,
-        n_dnn_slices,
+        n_slices,
         1,
         nx,
-        min_dnn_sum,
-        min_bkg_neff,
+        min_slice_sum,
+        min_slice_bkg_neff,
         sig_mode,
-        min_dnn_bkg_each,
-        min_dnn_bkg_neff,
+        min_slice_bkg_each,
+        min_slice_bkg_each_neff,
         min_bkg_frac,
     )
-    dnn_slices = extend_outer_edges(dnn_slices, 0, nx + 1)
+    slices = extend_outer_edges(slices, 0, nx + 1)
 
     result = []
-    for xlo, xhi in dnn_slices:
+    for xlo, xhi in slices:
         # ProjectionY attaches its result to gDirectory (here, the open output
         # file); detach so these die with the loop iteration instead of piling up
         # in the output file's in-memory object list.
@@ -606,27 +608,27 @@ def discover_binning(
             for name, hists in bkg2d_by_name.items()
         }
         sig_y = _detach(sig2d.ProjectionY(f"_disc_sig_{xlo}_{xhi}_y", xlo, xhi, "e"))
-        n_bins = mass_bin_budget(bkg_y_by_name, 1, ny, max_mass_bins, bkg_per_mass_bin)
-        mass_ranges = find_mass_bins(
+        n_bins = bin_budget(bkg_y_by_name, 1, ny, max_bins_per_slice, bkg_per_bin)
+        bin_ranges = find_bins(
             sig_y,
             bkg_y_by_name,
             n_bins,
             1,
             ny,
-            min_mass_each,
+            min_bin_each,
             min_bkg_frac,
-            min_mass_bkg_neff,
+            min_bin_bkg_neff,
         )
-        mass_ranges = extend_outer_edges(mass_ranges, 0, ny + 1)
-        result.append({"x_range": (xlo, xhi), "y_ranges": mass_ranges})
+        bin_ranges = extend_outer_edges(bin_ranges, 0, ny + 1)
+        result.append({"x_range": (xlo, xhi), "y_ranges": bin_ranges})
     return result
 
 
-def mass_bin_edges(y_axis, y_ranges):
-    """Physical HME edges of the discovered y ranges, for booking the output TH1.
+def bin_edges(y_axis, y_ranges):
+    """Physical edges of the discovered y ranges, for booking the output TH1.
 
     The rebinned shapes used to be booked as n_bins over [0, n_bins], which threw
-    the HME scale away and left every plot labelled by bin index. The ranges are
+    the axis scale away and left every plot labelled by bin index. The ranges are
     contiguous and ordered, so the edges are each range's low edge plus the last
     range's upper edge. extend_outer_edges() pushes the outer ranges into the
     underflow/overflow bins, which have no finite edge of their own -- those are
@@ -679,7 +681,7 @@ def slice_ranges(x_axis, slices):
     The slice x_ranges are bin indices, and extend_outer_edges() has already pushed the
     outermost ones into underflow/overflow -- those have no finite edge, so they are
     recorded as null and read back as an open-ended selection. Written out by run() so
-    the plots can say which DNN selection each slice actually is; nothing downstream of
+    the plots can say which selection each slice actually is; nothing downstream of
     the datacards needs it.
     """
     n = x_axis.GetNbins()
@@ -701,7 +703,7 @@ def rebin_hist_2d(hist2d, slices, name, naming):
     outputs = []
     for slice_idx, sl in enumerate(slices):
         xlo, xhi = sl["x_range"]
-        edges = array.array("d", mass_bin_edges(hist2d.GetYaxis(), sl["y_ranges"]))
+        edges = array.array("d", bin_edges(hist2d.GetYaxis(), sl["y_ranges"]))
         # Detached for the same reason as the projections above: Write() targets
         # gDirectory regardless, so nothing needs these to stay attached.
         h = _detach(
@@ -730,18 +732,18 @@ def process_category(
     mass,
     era,
     discovery_files,
-    n_dnn_slices,
-    max_mass_bins,
-    min_dnn_sum,
-    min_mass_each,
+    n_slices,
+    max_bins_per_slice,
+    min_slice_sum,
+    min_bin_each,
     min_signal,
-    min_bkg_neff=0.0,
+    min_slice_bkg_neff=0.0,
     min_bkg_frac=0.0,
-    min_mass_bkg_neff=0.0,
-    bkg_per_mass_bin=0.0,
+    min_bin_bkg_neff=0.0,
+    bkg_per_bin=0.0,
     sig_mode="sb",
-    min_dnn_bkg_each=0.0,
-    min_dnn_bkg_neff=0.0,
+    min_slice_bkg_each=0.0,
+    min_slice_bkg_each_neff=0.0,
 ):
     prefix = f"{channel}/{category}/"
     cat_dir = in_file.Get(f"{channel}/{category}")
@@ -785,21 +787,21 @@ def process_category(
     slices = discover_binning(
         disc_sig,
         disc_bkg_by_name,
-        n_dnn_slices,
-        max_mass_bins,
-        min_dnn_sum,
-        min_mass_each,
-        min_bkg_neff,
+        n_slices,
+        max_bins_per_slice,
+        min_slice_sum,
+        min_bin_each,
+        min_slice_bkg_neff,
         min_bkg_frac,
-        min_mass_bkg_neff,
-        bkg_per_mass_bin,
+        min_bin_bkg_neff,
+        bkg_per_bin,
         sig_mode,
-        min_dnn_bkg_each,
-        min_dnn_bkg_neff,
+        min_slice_bkg_each,
+        min_slice_bkg_each_neff,
     )
-    # The DNN selection each slice stands for is otherwise nowhere in the output: the
-    # sliced categories are named by index and the surviving axis is the HME one. It is
-    # the slice directory's own title, so it travels with the histograms and there is no
+    # The selection each slice stands for is otherwise nowhere in the output: the sliced
+    # categories are named by index and the surviving axis is the rebinned one. It is the
+    # slice directory's own title, so it travels with the histograms and there is no
     # side-car path to hand a reader correctly and no key name for the two ends to agree
     # on -- anything that can open the shapes can already read it.
     naming = cfg["naming"]
@@ -828,18 +830,18 @@ def run(
     config_path,
     era,
     discovery_eras,
-    n_dnn_slices,
-    max_mass_bins,
-    min_dnn_sum,
-    min_mass_each,
+    n_slices,
+    max_bins_per_slice,
+    min_slice_sum,
+    min_bin_each,
     min_signal,
-    min_bkg_neff=0.0,
+    min_slice_bkg_neff=0.0,
     min_bkg_frac=0.0,
-    min_mass_bkg_neff=0.0,
-    bkg_per_mass_bin=0.0,
+    min_bin_bkg_neff=0.0,
+    bkg_per_bin=0.0,
     sig_mode="sb",
-    min_dnn_bkg_each=0.0,
-    min_dnn_bkg_neff=0.0,
+    min_slice_bkg_each=0.0,
+    min_slice_bkg_each_neff=0.0,
     category_pattern=None,
     slice_var="x",
 ):
@@ -885,18 +887,18 @@ def run(
                     mass,
                     era,
                     discovery_files,
-                    n_dnn_slices,
-                    max_mass_bins,
-                    min_dnn_sum,
-                    min_mass_each,
+                    n_slices,
+                    max_bins_per_slice,
+                    min_slice_sum,
+                    min_bin_each,
                     min_signal,
-                    min_bkg_neff,
+                    min_slice_bkg_neff,
                     min_bkg_frac,
-                    min_mass_bkg_neff,
-                    bkg_per_mass_bin,
+                    min_bin_bkg_neff,
+                    bkg_per_bin,
                     sig_mode,
-                    min_dnn_bkg_each,
-                    min_dnn_bkg_neff,
+                    min_slice_bkg_each,
+                    min_slice_bkg_each_neff,
                 )
 
         out_file.Close()
@@ -909,7 +911,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Rebin 2D (DNN x HME) histograms into significance-sliced 1D shapes."
+        description="Rebin 2D histograms into significance-sliced 1D shapes."
     )
     parser.add_argument(
         "--input",
@@ -955,40 +957,40 @@ if __name__ == "__main__":
         "selection it stands for (e.g. 'DNN' -> '0.80 < DNN < 1.00')",
     )
     parser.add_argument(
-        "--n-dnn-slices",
+        "--n-slices",
         required=False,
         type=int,
         default=4,
-        help="fixed number of DNN slices per category (must be the same for every mass point)",
+        help="fixed number of slices per category (must be the same for every mass point)",
     )
     parser.add_argument(
-        "--max-mass-bins",
+        "--max-bins-per-slice",
         required=False,
         type=int,
         default=10,
-        help="mass bins to aim for inside each DNN slice; backed off until achievable",
+        help="bins to aim for inside each slice; backed off until achievable",
     )
     parser.add_argument(
-        "--min-dnn-bkg-sum",
+        "--min-slice-bkg-sum",
         required=False,
         type=float,
         default=1.0,
-        help="minimum summed-background yield required in a DNN slice",
+        help="minimum summed-background yield required in a slice",
     )
     parser.add_argument(
-        "--min-mass-bkg-each",
+        "--min-bin-bkg-each",
         required=False,
         type=float,
         default=0.01,
         help="minimum yield required of every individual background in a mass bin",
     )
     parser.add_argument(
-        "--min-bkg-neff",
+        "--min-slice-bkg-neff",
         required=False,
         type=float,
         default=0.0,
         help="minimum effective MC entries ((sum/err)^2) required of the summed "
-        "background for a DNN slice boundary to be selectable",
+        "background for a slice boundary to be selectable",
     )
     parser.add_argument(
         "--min-bkg-frac",
@@ -996,7 +998,7 @@ if __name__ == "__main__":
         type=float,
         default=0.0,
         help="backgrounds contributing less than this fraction of the total are "
-        "exempt from --min-mass-bkg-each, so a statistically starved minor "
+        "exempt from --min-bin-bkg-each, so a statistically starved minor "
         "process cannot collapse a slice to a single mass bin",
     )
     parser.add_argument(
@@ -1008,30 +1010,30 @@ if __name__ == "__main__":
         "(below this, e.g. boosted at low MX, the category is skipped entirely)",
     )
     parser.add_argument(
-        "--min-mass-bkg-neff",
+        "--min-bin-bkg-neff",
         required=False,
         type=float,
         default=0.0,
         help="minimum effective MC entries required of the summed background in "
-        "every mass bin. The --min-bkg-neff analogue for the bins inside a "
+        "every mass bin. The --min-slice-bkg-neff analogue for the bins inside a "
         "slice, which is where essentially every fit bin lives",
     )
     parser.add_argument(
-        "--bkg-per-mass-bin",
+        "--bkg-per-bin",
         required=False,
         type=float,
         default=0.0,
         help="target summed-background yield per mass bin; caps the bin count at "
-        "B_slice/this instead of always using --max-mass-bins. 0 disables, "
-        "restoring the fixed --max-mass-bins for every slice",
+        "B_slice/this instead of always using --max-bins-per-slice. 0 disables, "
+        "restoring the fixed --max-bins-per-slice for every slice",
     )
     parser.add_argument(
-        "--min-dnn-bkg-each",
+        "--min-slice-bkg-each",
         required=False,
         type=float,
         default=0.0,
-        help="minimum yield required of every non-negligible background in a DNN "
-        "slice. The --min-mass-bkg-each analogue for the slice boundaries "
+        help="minimum yield required of every non-negligible background in a "
+        "slice. The --min-bin-bkg-each analogue for the slice boundaries "
         "themselves, which were previously gated on the summed background only: "
         "a background that had fluctuated negative was hidden inside a healthy "
         "total, and the resulting slice could not be made into a datacard. "
@@ -1039,13 +1041,13 @@ if __name__ == "__main__":
         "0 disables",
     )
     parser.add_argument(
-        "--min-dnn-bkg-neff",
+        "--min-slice-bkg-each-neff",
         required=False,
         type=float,
         default=0.0,
         help="minimum effective MC entries required of every non-negligible "
-        "background in a DNN slice (same exemption as --min-dnn-bkg-each). Much "
-        "stronger than --min-dnn-bkg-each and correspondingly expensive: on "
+        "background in a slice (same exemption as --min-slice-bkg-each). Much "
+        "stronger than --min-slice-bkg-each and correspondingly expensive: on "
         "Run3_Early a threshold of 4 cost 35% of the combined Asimov Z in "
         "muMu/SR/res2b at m500, against 2.3% for the yield floor alone. 0 disables",
     )
@@ -1055,7 +1057,7 @@ if __name__ == "__main__":
         type=str,
         default="sb",
         choices=["sb", "asimov"],
-        help="figure of merit for DNN slice boundaries: 'sb' = S/sqrt(B+sigmaB^2), "
+        help="figure of merit for slice boundaries: 'sb' = S/sqrt(B+sigmaB^2), "
         "'asimov' = Poisson-correct Asimov significance (valid at low B)",
     )
     args = parser.parse_args()
@@ -1070,18 +1072,18 @@ if __name__ == "__main__":
         args.config,
         args.era,
         discovery_eras,
-        args.n_dnn_slices,
-        args.max_mass_bins,
-        args.min_dnn_bkg_sum,
-        args.min_mass_bkg_each,
+        args.n_slices,
+        args.max_bins_per_slice,
+        args.min_slice_bkg_sum,
+        args.min_bin_bkg_each,
         args.min_signal,
-        args.min_bkg_neff,
+        args.min_slice_bkg_neff,
         args.min_bkg_frac,
-        args.min_mass_bkg_neff,
-        args.bkg_per_mass_bin,
+        args.min_bin_bkg_neff,
+        args.bkg_per_bin,
         args.significance_mode,
-        args.min_dnn_bkg_each,
-        args.min_dnn_bkg_neff,
+        args.min_slice_bkg_each,
+        args.min_slice_bkg_each_neff,
         category_pattern=args.category_pattern,
         slice_var=args.slice_var,
     )

@@ -107,8 +107,8 @@ class StatInferenceTask(Task):
 
     def get_required_variables(self):
         """The Hists_merged variables this chain reads: one per mass point (the 2D
-        DNN-vs-HME histogram, or the 1D DNN score for a configuration that does not
-        rebin), derived from the datacard config's input_file_pattern.
+        histogram HistRebinTask slices, or an already-1D shape for a configuration that
+        does not rebin), derived from the datacard config's input_file_pattern.
 
         This is the *complete* input list -- there is no intersection with global.yaml's
         histTuple_flavor variable list anywhere downstream, so a mass point present here

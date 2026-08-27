@@ -35,11 +35,11 @@ if __name__ == "__main__":
         help="parameter values to run only certain masses",
     )
     parser.add_argument(
-        "--n-dnn-slices",
+        "--n-slices",
         required=False,
         type=int,
         default=None,
-        help="DNN slices each base category was cut into by HistRebinTask; "
+        help="slices each base category was cut into by HistRebinTask; "
         "defaults to the config's binning block. Pass the value that "
         "task actually used, so the datacard bins match the input files. "
         "0 -- or an unset value with no binning block in the config -- means the "
@@ -88,7 +88,7 @@ if __name__ == "__main__":
         args.input,
         hist_bins=hist_bins,
         param_values=param_values,
-        n_dnn_slices=args.n_dnn_slices,
+        n_slices=args.n_slices,
         category_pattern=args.category_pattern,
         **kwargs,
     )
