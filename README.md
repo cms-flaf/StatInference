@@ -6,7 +6,7 @@ Two independent things in this repository choose the binning of the shapes that 
 the datacards. They do not share code, and an analysis uses one or the other.
 
 **1. In-chain rebinning — `dc_make/hist_rebin_2d.py`.** A production step, run by
-`HistRebinTask` in `law/tasks.py`: it derives the bin edges from the shapes themselves
+`HistRebinTask` in `law/HistRebinTask.py`: it derives the bin edges from the shapes themselves
 (no fits, no limits) and writes the rebinned histograms the datacards are built from, so
 `CreateDatacardsTask` cannot run without it. Its knobs come from the `binning:` block of
 the datacard configuration — see the annotated block in the HH→bbWW Run 3 configuration,
