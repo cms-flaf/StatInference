@@ -1003,7 +1003,7 @@ class DatacardMaker:
             )
             cb_copy = self.cbCopy(param_str, proc, era, channel, category)
             cb_copy.AddSyst(self.cb, unc_name, unc_to_apply.type.name, systMap)
-            if unc_to_apply.type == UncertaintyType.shape:
+            if isinstance(unc_to_apply, ShapeUncertainty):
                 shape_set = False
 
                 def setShape(syst):
@@ -1034,7 +1034,9 @@ class DatacardMaker:
                     ):
                         continue
 
-                    if self.isMetaEra(era) and unc.type == UncertaintyType.lnN:
+                    if self.isMetaEra(era) and isinstance(
+                        unc, (LnNUncertainty, MultiValueLnNUncertainty)
+                    ):
                         self._addMetaEraLnNAsShapeUnc(
                             unc_name,
                             proc_name,
@@ -1093,7 +1095,7 @@ class DatacardMaker:
                     cb_copy = self.cbCopy(param_str, proc_name, era, channel, category)
                     cb_copy.AddSyst(self.cb, unc_name, unc_to_apply.type.name, systMap)
 
-                    if unc_to_apply.type == UncertaintyType.shape:
+                    if isinstance(unc_to_apply, ShapeUncertainty):
 
                         def setShape(syst):
                             syst.set_shapes(

@@ -8,7 +8,7 @@ from string import Template
 from FLAF.RunKit.run_tools import ps_call
 from FLAF.run_tools.law_customizations import HTCondorWorkflow, copy_param
 
-from StatInference.common.tools import CategoryNaming
+from StatInference.common.tools import CategoryNaming, importROOT
 
 from .PreprocessShapesTask import PreprocessShapesTask
 from .StatInferenceTask import StatInferenceTask
@@ -192,6 +192,25 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             writer.write(f)
         return True
 
+    @staticmethod
+    def _present_keys(shape_file, cfg):
+        """The (channel, region, category) triples the summed shape file actually holds."""
+        ROOT = importROOT()
+        present = set()
+        f = ROOT.TFile.Open(shape_file)
+        if not f or f.IsZombie():
+            return present
+        try:
+            for category in cfg["categories"]:
+                region, _, cat = category.rpartition("/")
+                for channel in cfg["channels"]:
+                    path = "/".join(x for x in (channel, region, cat) if x)
+                    if f.Get(path):
+                        present.add((channel, region, cat))
+        finally:
+            f.Close()
+        return present
+
     def _stitch_grids(self, cfg, plots_dir, variable, panel_of_key):
         """One grid per base category: its slices across, the channels down."""
         naming = CategoryNaming.fromConfig(cfg)
@@ -251,18 +270,39 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             if not inputs:
                 continue
             summed = os.path.join(plots_dir, f"_summed_{variable}.root")
+            try:
+                ps_call(["hadd", "-f", summed] + inputs, verbose=1)
+            except Exception as e:
+                print(
+                    f"WARNING: could not sum the shapes for {variable}, "
+                    f"datacards are unaffected: {e}"
+                )
+                continue
+
+            # Only the categories this mass point actually has. The configuration lists
+            # every datacard bin, but the preprocessing gates drop a category where the
+            # signal is too small -- boosted at a low mass, say -- and it is then absent
+            # from the shapes. HistPlotter exits non-zero on the first key it cannot find,
+            # so passing the full list costs every panel and grid that would have come
+            # after the gap, not just the missing one.
+            present = self._present_keys(summed, cfg)
             keys, outputs = [], []
             for category in cfg["categories"]:
                 # "SR/res2b_dnn0" -> region "SR", category "res2b_dnn0": HistPlotter
                 # navigates channel -> region -> category.
                 region, _, cat = category.rpartition("/")
                 for channel in cfg["channels"]:
+                    if (channel, region, cat) not in present:
+                        continue
                     keys.append(f"{channel}:{cat}:{region}")
                     outputs.append(
                         os.path.join(
                             plots_dir, f"{variable}_{channel}_{region}_{cat}.pdf"
                         )
                     )
+            if not keys:
+                print(f"WARNING: no shapes to plot for {variable}")
+                continue
             cmd = [
                 "python3",
                 plotter,
@@ -298,7 +338,6 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                 "y",
             ]
             try:
-                ps_call(["hadd", "-f", summed] + inputs, verbose=1)
                 ps_call(cmd, verbose=1)
                 self._stitch_grids(cfg, plots_dir, variable, dict(zip(keys, outputs)))
             except Exception as e:
