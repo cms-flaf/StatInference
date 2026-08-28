@@ -16,7 +16,8 @@ rebinned shapes as `<output>/<source era>/<variable>/<variable>.root`, plus the
 
 It runs as the datacard configuration's **preprocessing step**, not as part of this
 repository's logic. `PreprocessShapesTask` runs whatever `preprocess:` names, supplying
-`--input`, `--output` and `--era`; nothing here knows what the step does, and a
+`--input`, `--output`, `--era` and `--config` (the datacard configuration); nothing here
+knows what the step does, and a
 configuration that declares no `preprocess:` block skips the task entirely and reads the
 merged histograms as they are:
 

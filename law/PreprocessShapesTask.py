@@ -15,8 +15,10 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
     """Run the datacard configuration's `preprocess:` step over the merged histograms.
 
     A hook, not a rebinning. The configuration names a script and any arguments it wants;
-    this task supplies --input, --output and --era and knows nothing else about what the
-    step does. HH->bbWW plugs in bin_opt_2d/rebin_2d.py to cut its 2D DNN-vs-HME shapes
+    this task supplies --input, --output, --era and --config and knows nothing else about
+    what the step does. --config is the datacard configuration, which any step working on
+    these shapes needs anyway: it is where the processes, the model and the categories
+    are. HH->bbWW plugs in bin_opt_2d/rebin_2d.py to cut its 2D DNN-vs-HME shapes
     into per-slice 1D ones, but an analysis that needs some other transformation writes its
     own script, and one that needs none declares no `preprocess:` block at all -- then this
     task is never scheduled and CreateDatacardsTask reads the merged histograms directly.
@@ -90,6 +92,8 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
                 local_output.abspath,
                 "--era",
                 self.datacard_era,
+                "--config",
+                self.datacard_config_path(),
             ]
             # ${ERA} in an argument names the era being produced, the same way the model's
             # input_file_pattern does. Relative paths are resolved against the analysis
