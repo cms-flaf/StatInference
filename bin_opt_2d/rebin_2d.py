@@ -93,10 +93,9 @@ def load_config(config_path):
         cfg = yaml.safe_load(f)
     model = Model.fromConfig(cfg["model"])
     channels = cfg["channels"]
-    # cfg["categories"] holds base category names ("SR/res2b"), which is exactly what
-    # the raw 2D histograms are keyed by. The per-slice names this script writes are
-    # built by the CategoryNaming run() installs below.
-    categories = list(dict.fromkeys(cfg["categories"]))
+    # Taken verbatim here; run() reduces them to the base categories the 2D input is
+    # actually keyed by, once it has the pattern to do it with.
+    categories = list(cfg["categories"])
 
     # Several processes may carry is_signal (e.g. the bbWW(2l) and bbtautau decay
     # modes of the same resonance, both scaled by the same signal strength). They
@@ -968,6 +967,15 @@ def run(
     # shapes recovers the base category from the same pattern in the datacard config.
     cfg["naming"] = CategoryNaming(knobs["category_pattern"])
     cfg["slice_var"] = knobs["slice_var"]
+    # The datacard configuration lists the sliced names this script *writes*
+    # ("SR/res2b_dnn0"); the 2D input it *reads* is keyed by the base categories those
+    # slices are cut from ("SR/res2b"). Recover them with the same pattern that names
+    # them, so the two ends cannot disagree about which is which. A configuration that
+    # lists base names already is unchanged by this -- base() returns an unsliced name
+    # as-is.
+    cfg["categories"] = list(
+        dict.fromkeys(cfg["naming"].base(c) for c in cfg["categories"])
+    )
     model = cfg["model"]
 
     record = {
