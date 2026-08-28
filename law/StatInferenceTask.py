@@ -154,23 +154,6 @@ class StatInferenceTask(Task):
             for variable in self.get_required_variables()
         }
 
-    def rebinned_hist_reqs(self, eras, target_era):
-        """{(era, variable): RebinnedHists} -- the rebinned inputs for those eras.
-
-        Keyed the same way as merged_hist_reqs() so stage_inputs() lays either out as
-        "<era>/<variable>/<variable>.root", which is what input_file_pattern resolves
-        against: the datacard step does not need to know which of the two it got.
-        """
-        from .RebinnedHists import RebinnedHists
-
-        return {
-            (era, variable): RebinnedHists.req(
-                self, period=era, variable=variable, target_era=target_era
-            )
-            for era in eras
-            for variable in self.get_required_variables()
-        }
-
     @contextlib.contextmanager
     def stage_inputs(self, targets):
         """Assemble the required merged histograms into the "<era>/<variable>/

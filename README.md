@@ -8,27 +8,27 @@ part of the datacard chain**: both are offline pre-steps that produce input the 
 consumes, so `CreateDatacardsTask` reads whatever shapes it is pointed at and does no
 binning of its own.
 
-**1. Shape-driven 2D→1D rebinning — `bin_opt_2d/rebin_2d.py`.** Derives the bin edges from
-the shapes themselves (no fits, no limits): it cuts the x axis of each 2D input into slices
-that become datacard categories, and rebins y into the bins of each slice. Its knobs come
-from `bin_opt_2d/binning.yaml`; `bin_opt_2d/call_rebin_2d.sh` is a worked example.
+**1. Shape-driven 2D→1D binning — `bin_opt_2d/rebin_2d.py`.** Derives bin edges from the
+shapes themselves (no fits, no limits): it cuts the x axis of a 2D input into slices that
+become datacard categories, and rebins y into the bins of each slice. Its knobs come from
+`bin_opt_2d/binning.yaml`; `bin_opt_2d/call_rebin_2d.sh` is a worked example.
 
-It writes two things next to each other:
+Its only product is a `binning.json`, one per era of the datacard configuration's `eras:`
+list, written to `<output>/<era>/`. It writes no shapes: `dc_make/binner.py` applies the
+recorded edges to the merged 2D histograms when the cards are built, so the configuration
+consumes a binning the same way it always has, through `hist_bins`. Nothing intermediate
+is stored and nothing can go stale against the binning that describes it.
 
-- the rebinned shapes, in the same `<era>/<variable>/<variable>.root` layout FLAF's
-  `HistMergerTask` produces — so the chain consumes them by pointing `--hists-version` at
-  that production, and nothing downstream is aware a rebinning happened;
-- `binning.json`, recording the edges it chose. Passing it back as `--binning` replays
-  that binning exactly instead of re-deriving one, which is how a production is frozen and
-  reproduced.
+Which era a file is for decides how it was derived. A plain era is binned on its own
+statistics, for a standalone limit; an era that is a key of `era_groups:` is binned on its
+members' summed statistics. A combination supports finer bins than any single era, so the
+two are genuinely different and each gets its own file.
 
-Each base category (`SR/res2b`) becomes per-slice categories named by the
-`category_pattern` knob, e.g. `{base_category}_dnn{slice_idx}`. The pattern is the
-analysis's choice — nothing here assumes the sliced axis is a DNN score.
-`common/tools.py:CategoryNaming` both writes those names and parses them back from that one
-pattern, so a datacard configuration reading these shapes lists the sliced names in
-`categories:` and repeats the same `category_pattern`, which is how the per-category limits
-group the slices of one base category back together.
+Each base category (`SR/res2b`) becomes per-slice categories named by the `category_pattern`
+knob, e.g. `{base_category}_dnn{slice_idx}`. The pattern is the analysis's choice — nothing
+here assumes the sliced axis is a DNN score. `common/tools.py:CategoryNaming` both writes
+those names and parses them back from that one pattern, and the record carries the pattern
+it used, so `Binner` reads a name apart exactly as it was written.
 
 **2. Limit-driven binning optimisation — `bin_opt/`.** A search harness, documented below:
 it builds candidate binnings, runs limits with combine for each, and ranks them. Its product
