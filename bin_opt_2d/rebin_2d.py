@@ -21,7 +21,8 @@ from StatInference.dc_make.model import Model
 ROOT = importROOT()
 
 
-# Written next to the rebinned shapes, and read back by --binning to replay them.
+# Written inside each era's own output directory, beside the shapes it describes, and
+# read back by --binning to replay them.
 BINNING_JSON = "binning.json"
 
 # The knobs that decide the binning, with the values a configuration gets when it does
@@ -1058,32 +1059,16 @@ def run(
             out_file.Close()
             in_file.Close()
 
-    # Written next to the shapes rather than beside the script: the binning belongs to the
-    # production it produced, and --binning replays it onto the same input.
-    #
-    # Merged into whatever is already there rather than overwriting it. A production is
-    # built one era at a time into a shared tree, so each run holds only its own era and a
-    # plain write would leave the file describing whichever era finished last -- with the
-    # other three silently missing, and a --binning replay of them quietly falling back to
-    # re-optimising.
-    json_path = os.path.join(output_dir, BINNING_JSON)
-    os.makedirs(output_dir, exist_ok=True)
-    if os.path.exists(json_path):
-        with open(json_path, "r") as f:
-            existing = json.load(f)
-        for key in ("slice_var", "category_pattern"):
-            if existing.get(key) != record[key]:
-                raise RuntimeError(
-                    f"{json_path} records {key}={existing.get(key)!r}, but this run used "
-                    f"{record[key]!r}. The eras of one production have to agree, or the "
-                    "categories they wrote do not line up."
-                )
-        existing["binning"].update(record["binning"])
-        existing["knobs"] = record["knobs"]
-        record = existing
+    # Written inside the era's own directory, beside the shapes it describes. One era's
+    # binning has nothing to say about another's -- they are derived from different
+    # statistics -- so each owns its file, a re-run of one era cannot disturb another, and
+    # --binning replays a record by pointing at the era it belongs to.
+    era_dir = os.path.join(output_dir, era)
+    os.makedirs(era_dir, exist_ok=True)
+    json_path = os.path.join(era_dir, BINNING_JSON)
     with open(json_path, "w") as f:
         json.dump(record, f, indent=2, sort_keys=True)
-    print(f"Wrote {json_path} ({', '.join(sorted(record['binning']))})")
+    print(f"Wrote {json_path}")
 
 
 if __name__ == "__main__":
