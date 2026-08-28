@@ -6,6 +6,8 @@ import os
 from FLAF.RunKit.run_tools import ps_call
 from FLAF.run_tools.law_customizations import HTCondorWorkflow, copy_param
 
+from StatInference.common.tools import CategoryNaming
+
 from .StatInferenceTask import StatInferenceTask
 
 
@@ -126,6 +128,72 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             print(f"Warning: no var_list for {variable} ({e}); plotting it as itself")
         return variable
 
+    @staticmethod
+    def _stitch_grid(panels, out_path):
+        """Lay rendered panels out on one page: a row per channel, a column per slice.
+
+        The slices of a base category are one physical selection cut into pieces, and the
+        fit sees them together -- a slice that looks reasonable in eMu and pathological in
+        eE is obvious side by side and invisible in separate files. Only page geometry
+        happens here; every panel is drawn by HistPlotter.py, so there is still one
+        plotting implementation.
+
+        `panels` is [[path or None, ...] per column] per row; a None leaves its cell blank,
+        which is what keeps column N under column N when a slice was skipped.
+        """
+        from pypdf import PageObject, PdfReader, PdfWriter, Transformation
+
+        pages = {
+            p: PdfReader(p).pages[0] for row in panels for p in row if p is not None
+        }
+        if not pages:
+            return False
+        w = max(float(p.mediabox.width) for p in pages.values())
+        h = max(float(p.mediabox.height) for p in pages.values())
+        n_rows, n_cols = len(panels), max(len(r) for r in panels)
+
+        sheet = PageObject.create_blank_page(width=w * n_cols, height=h * n_rows)
+        for r, row in enumerate(panels):
+            for c, path in enumerate(row):
+                if path is None:
+                    continue
+                # PDF origin is bottom-left, so the first row goes at the top.
+                sheet.merge_transformed_page(
+                    pages[path],
+                    Transformation().translate(c * w, (n_rows - 1 - r) * h),
+                )
+        writer = PdfWriter()
+        writer.add_page(sheet)
+        with open(out_path, "wb") as f:
+            writer.write(f)
+        return True
+
+    def _stitch_grids(self, cfg, plots_dir, variable, panel_of_key):
+        """One grid per base category: its slices across, the channels down."""
+        naming = CategoryNaming.fromConfig(cfg)
+        bases = {}
+        for category in cfg["categories"]:
+            region, _, cat = category.rpartition("/")
+            base, slice_idx = naming.split(cat)
+            bases.setdefault((region, base), {})[slice_idx] = cat
+        for (region, base), slices in bases.items():
+            # None for an unsliced category, which is a single-column grid of channels.
+            order = sorted(slices, key=lambda i: (i is None, i))
+            panels = [
+                [
+                    (lambda p: p if p and os.path.exists(p) else None)(
+                        panel_of_key.get(f"{channel}:{slices[i]}:{region}")
+                    )
+                    for i in order
+                ]
+                for channel in cfg["channels"]
+            ]
+            out = os.path.join(
+                plots_dir, f"{variable}_{region.replace('/', '_')}_{base}_grid.pdf"
+            )
+            if self._stitch_grid(panels, out):
+                print(f"Wrote grid {out}")
+
     def plot_rebinned_shapes(self, base_dir, config, output_dir):
         """Stacked plots of the shapes the cards are built from, one per datacard bin.
 
@@ -208,6 +276,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             try:
                 ps_call(["hadd", "-f", summed] + inputs, verbose=1)
                 ps_call(cmd, verbose=1)
+                self._stitch_grids(cfg, plots_dir, variable, dict(zip(keys, outputs)))
             except Exception as e:
                 # The datacards are the product that matters; a plotting failure should be
                 # loud but must not leave the task looking broken with valid cards on disk.
