@@ -19,7 +19,8 @@ class ResonantLimitsTask(StatInferenceTask):
         return (self.version, self.__class__.__name__, "combined")
 
     def get_eras(self):
-        return self.get_top_level_eras()
+        """Every era the configuration lists: each gets its own cards and its own limit."""
+        return self.get_all_eras()
 
     def _create_datacards_req(self, era, **kwargs):
         era_groups = self.get_era_groups()
@@ -91,10 +92,13 @@ class ResonantLimitsTask(StatInferenceTask):
                 if m:
                     masses.add(m.group(1))
 
+        # The cross-era combination is the one place a group era and its members cannot
+        # both appear: the group already *is* their combination, so a card built from both
+        # would count those events twice. Every era still gets its own limit above.
         for mass in masses:
             combine_args = []
-            for e in eras:
-                for c in era_cards[e]:
+            for e in self.get_top_level_eras():
+                for c in era_cards.get(e, []):
                     if c.endswith(f"_{mass}.txt"):
                         combine_args.append(f"{e}={c}")
                         break

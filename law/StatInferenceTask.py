@@ -77,14 +77,26 @@ class StatInferenceTask(Task):
     def get_era_groups(self):
         return self.get_config_data().get("era_groups", {})
 
+    def get_all_eras(self):
+        """Every era the configuration lists, each of which gets its own datacards, its
+        own limit and its own plots.
+
+        A group era and its members all appear here: they are separate measurements of
+        different datasets, not a double count. Only combining them into one card would
+        be -- see get_top_level_eras().
+        """
+        return self.get_config_data().get("eras", [self.period])
+
     def get_top_level_eras(self):
-        """Eras that carry their own datacards and limits: meta-eras plus any standalone
-        real era. Real eras already covered by a meta-era are excluded so they are not
-        double-counted alongside it."""
-        data = self.get_config_data()
-        eras = data.get("eras", [self.period])
+        """The eras that may be *combined* with each other: group eras plus any standalone
+        real era.
+
+        Members of a group are excluded because the group already is their combination, so
+        a card built from both would count those events twice. This is a strictly smaller
+        set than get_all_eras(), and only the cross-era combination uses it.
+        """
         grouped = {e for sub in self.get_era_groups().values() for e in sub}
-        return [e for e in eras if e not in grouped]
+        return [e for e in self.get_all_eras() if e not in grouped]
 
     def get_campaign(self, era):
         """dhi campaign key for an era, from the config's ``campaigns`` map.

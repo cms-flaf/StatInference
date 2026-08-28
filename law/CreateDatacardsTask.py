@@ -3,6 +3,8 @@ import law
 import luigi
 import os
 
+from string import Template
+
 from FLAF.RunKit.run_tools import ps_call
 from FLAF.run_tools.law_customizations import HTCondorWorkflow, copy_param
 
@@ -69,9 +71,17 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
     def run(self):
         statInf_entry = self.global_params["StatInference"]
         config = self.datacard_config_path()
+        # ${ERA} in hist_bins names the era the cards are for, the same way the model's
+        # input_file_pattern does. Each era has its own binning -- derived from its own
+        # statistics, or its members' summed -- so one configuration serves them all.
         hist_bins_rel = statInf_entry.get("hist_bins")
         hist_bins = (
-            os.path.join(self.ana_path(), hist_bins_rel) if hist_bins_rel else None
+            os.path.join(
+                self.ana_path(),
+                Template(hist_bins_rel).safe_substitute(ERA=self.datacard_era),
+            )
+            if hist_bins_rel
+            else None
         )
         param_values = statInf_entry.get("param_values", [])
         create_datacards_py = os.path.join(

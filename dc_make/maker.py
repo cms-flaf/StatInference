@@ -213,6 +213,16 @@ class DatacardMaker:
     def ECC(self):
         return itertools.product(self.eras, self.channels, self.categories)
 
+    def histCategory(self, category):
+        """The directory a category's histograms live in, for a datacard bin name.
+
+        These are not the same thing when the shapes are binned at datacard time. The bin
+        is a slice ("SR/res2b_dnn0"), but the input holds the base category it is cut from
+        ("SR/res2b") and Binner does the cutting -- so every path built to *read* a
+        histogram uses the base, while everything naming a datacard bin keeps the slice.
+        """
+        return self.naming.base(category)
+
     def getCategoryGroups(self):
         """{"SR/res2b": ["SR/res2b_dnn0", ...]} -- the slices of one base category.
 
@@ -264,8 +274,29 @@ class DatacardMaker:
         scaled.SetDirectory(0)
         return scaled
 
+    @staticmethod
+    def readHist(file, hist_name):
+        """A histogram from a file, owned by Python rather than by ROOT.
+
+        TFile.Get() hands back an object ROOT keeps alive for the lifetime of the file, so
+        dropping the Python reference frees nothing. That is affordable when the objects
+        are the small 1D shapes a datacard bin is made of; it is not when they are the 2D
+        inputs a binning is cut from, where one era's build walked through ~15 GB. Taking
+        ownership lets refcounting free each one after it has been sliced, while anything
+        still referenced -- a cached shape -- stays alive as usual.
+
+        Returns None if the path is missing: TFile.Get() on a fully-missing nested path
+        returns a PyROOT wrapper around a null pointer, which is not `is None` but is
+        falsy, so `if obj:` is the correct check.
+        """
+        obj = file.Get(hist_name)
+        if not obj:
+            return None
+        ROOT.SetOwnership(obj, True)
+        return obj
+
     def _loadBinnedHist(self, file, era, channel, category, model_params, hist_name):
-        hist = file.Get(hist_name)
+        hist = self.readHist(file, hist_name)
         if hist is None:
             raise RuntimeError(f"Cannot find histogram {hist_name} in {file.GetName()}")
         binned = self.hist_binner.applyBinning(
@@ -294,7 +325,7 @@ class DatacardMaker:
                 channel,
                 category,
                 model_params,
-                f"{channel}/{category}/{hist_name_suffix}",
+                f"{channel}/{self.histCategory(category)}/{hist_name_suffix}",
             )
             unc_value = self._getLnNValue(
                 unc, process, proc_name_for_unc, sub_era, channel, category
@@ -536,14 +567,16 @@ class DatacardMaker:
                 if hist is None:
                     raise RuntimeError("Cannot create asimov data histogram")
             else:
-                hist_name = f"{channel}/{category}/{process.hist_name}"
+                hist_name = (
+                    f"{channel}/{self.histCategory(category)}/{process.hist_name}"
+                )
                 hists = []
                 if process.subprocesses:
                     for subp in process.subprocesses:
-                        hist_name = f"{channel}/{category}/{subp}"
+                        hist_name = f"{channel}/{self.histCategory(category)}/{subp}"
                         if unc_name and unc_scale:
                             hist_name += f"_{unc_name}_{unc_scale}"
-                        subhist = file.Get(hist_name)
+                        subhist = self.readHist(file, hist_name)
                         if subhist == None:
                             raise RuntimeError(
                                 f"Cannot find histogram {hist_name} in {file.GetName()}"
@@ -556,7 +589,7 @@ class DatacardMaker:
                 else:
                     if unc_name and unc_scale:
                         hist_name += f"_{unc_name}_{unc_scale}"
-                    hist = file.Get(hist_name)
+                    hist = self.readHist(file, hist_name)
                     if hist == None:
                         raise RuntimeError(
                             f"Cannot find histogram {hist_name} in {file.GetName()}"
@@ -765,15 +798,20 @@ class DatacardMaker:
         counterpart) where a specific era+category+mass genuinely has no signal
         MC -- e.g. a standalone single-era limit for a sparse category/channel
         that only has signal statistics once combined with other eras."""
+        # A binning derived from the shapes skips exactly those cases: too little signal
+        # to cut a category into slices means there is no bin here to fill, whatever the
+        # input file holds. Asking the binner keeps that judgement in one place rather
+        # than re-deriving it from the histogram.
+        if self.hist_binner.sliceOf(channel, category, process.params) is None and (
+            self.hist_binner.slices is not None
+        ):
+            return False
         sub_eras = self.getSubEras(era) if self.isMetaEra(era) else [era]
-        hist_name = f"{channel}/{category}/{process.hist_name}"
+        hist_name = f"{channel}/{self.histCategory(category)}/{process.hist_name}"
         for sub_era in sub_eras:
             _, file = self.getInputFile(sub_era, process.params)
-            obj = file.Get(hist_name)
-            # TFile.Get() on a fully-missing nested path can return a PyROOT
-            # wrapper around a null C++ pointer, which is not `is None` but is
-            # falsy -- `if obj:` (not `is not None`) is the correct null check.
-            if obj and obj.InheritsFrom("TH1"):
+            obj = self.readHist(file, hist_name)
+            if obj is not None and obj.InheritsFrom("TH1"):
                 return True
         return False
 
@@ -782,6 +820,15 @@ class DatacardMaker:
         process = self.processes[proc]
 
         def add(model_params, param_str, process_name):
+            # A binning derived from the shapes records nothing for a category it could
+            # not cut -- too little signal to slice, typically boosted at low mass in a
+            # single era. There is no datacard bin there for any process, so skip rather
+            # than book one and fail looking for its shape.
+            if (
+                self.hist_binner.slices is not None
+                and self.hist_binner.sliceOf(channel, category, model_params) is None
+            ):
+                return
             if process.is_data:
                 self.cb.AddObservations(
                     [param_str],

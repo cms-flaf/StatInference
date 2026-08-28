@@ -391,4 +391,6 @@ class PlotResonantLimitsTask(StatInferenceTask):
                 json.dump(sorted(produced), f, indent=2)
 
     def get_eras_to_plot(self):
-        return self.get_top_level_eras()
+        """Every era the configuration lists -- each has its own limit, so each gets its
+        own plots."""
+        return self.get_all_eras()
