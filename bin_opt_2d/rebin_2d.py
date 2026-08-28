@@ -132,6 +132,7 @@ def load_config(config_path):
         "model": model,
         "channels": channels,
         "categories": categories,
+        "era_groups": cfg.get("era_groups", {}),
         "signal_hist_name_patterns": signal_hist_names,
         "signal_param_name": extractParameters(signal_hist_names[0])[0],
         "mass_values": mass_values,
@@ -840,8 +841,7 @@ def rebin_hist_2d(hist2d, slices, name, naming):
 
 
 def process_category(
-    in_file,
-    out_file,
+    sources,
     channel,
     category,
     cfg,
@@ -853,16 +853,25 @@ def process_category(
 ):
     """Rebin one channel/category, returning the binning it used (None if skipped).
 
+    The edges are discovered once from `discovery_files` -- every source era summed -- and
+    then applied to each source era separately, so a group era's members are cut on the
+    combination's statistics but stay in their own files. The datacard step still sums
+    them, which is what keeps a per-era lnN expressible: scaling one sub-era's own shape
+    needs that sub-era to still exist as a shape.
+
+    `sources` is [(source_era, in_file, out_file)]; for a plain era there is one.
+
     With `frozen` given the edges are replayed from a previous run's binning.json and no
     optimisation happens at all; the discovery files are then only read for the axes.
     """
     min_signal = knobs["min_signal"]
     prefix = f"{channel}/{category}/"
-    cat_dir = in_file.Get(f"{channel}/{category}")
+    # The key list comes from the first source era; a systematic that only some eras carry
+    # is filled in from their nominal by sum_over_sources().
+    cat_dir = sources[0][1].Get(f"{channel}/{category}")
     if not cat_dir:
-        print(f"  [skip] {channel}/{category}: not found in {in_file.GetName()}")
+        print(f"  [skip] {channel}/{category}: not found in {sources[0][1].GetName()}")
         return
-    keys = [k.GetName() for k in cat_dir.GetListOfKeys()]
 
     signal_keys = [
         applyParameters(pattern, {cfg["signal_param_name"]: mass})
@@ -924,22 +933,26 @@ def process_category(
     # on -- anything that can open the shapes can already read it.
     naming = cfg["naming"]
     ranges = slice_ranges(disc_sig.GetXaxis(), slices)
-    for slice_idx in range(len(slices)):
-        mkdir_titled(
-            out_file,
-            f"{channel}/{naming.name(category, slice_idx)}",
-            format_var_range(*ranges[slice_idx], var=cfg["slice_var"]),
-        )
 
-    for key in keys:
-        hist2d = load2d(in_file, key)
-        if hist2d is None or hist2d.GetDimension() != 2:
+    # One shared set of edges, applied to every source era in its own file.
+    for source_era, in_file, out_file in sources:
+        for slice_idx in range(len(slices)):
+            mkdir_titled(
+                out_file,
+                f"{channel}/{naming.name(category, slice_idx)}",
+                format_var_range(*ranges[slice_idx], var=cfg["slice_var"]),
+            )
+        cat_dir = in_file.Get(f"{channel}/{category}")
+        if not cat_dir:
+            print(f"  [skip] {source_era} {channel}/{category}: not in the input")
             continue
-        rebinned = rebin_hist_2d(hist2d, slices, key, naming)
-        for slice_idx, h in enumerate(rebinned):
-            out_cat = naming.name(category, slice_idx)
-            out_file.cd(f"{channel}/{out_cat}")
-            h.Write(key)
+        for key in [k.GetName() for k in cat_dir.GetListOfKeys()]:
+            hist2d = get_hist(in_file, prefix + key)
+            if hist2d is None or hist2d.GetDimension() != 2:
+                continue
+            for slice_idx, h in enumerate(rebin_hist_2d(hist2d, slices, key, naming)):
+                out_file.cd(f"{channel}/{naming.name(category, slice_idx)}")
+                h.Write(key)
 
     return slices_to_record(slices, disc_sig.GetXaxis(), disc_sig.GetYaxis())
 
@@ -949,17 +962,22 @@ def run(
     output_dir,
     config_path,
     era,
-    discovery_eras,
     knobs,
     frozen_binning=None,
 ):
-    """Rebin one era's shapes, writing the rebinned files and the binning that produced
-    them.
+    """Produce one era of the datacard configuration's `eras:` list.
 
-    Output layout is "<output_dir>/<era>/<variable>/<variable>.root" -- the same layout
-    HistMergerTask writes -- so a production of these can be consumed by pointing the
-    datacard chain's --hists-version at it, with nothing downstream aware that a rebinning
-    happened.
+    Which era it is decides everything. A plain era is binned on its own statistics, for
+    a standalone limit. An era that is a key of `era_groups:` is binned on its members'
+    summed statistics -- a combination supports finer bins than any single era can -- and
+    those edges are then applied to each member separately.
+
+    Output layout is "<output_dir>/<era>/<source_era>/<variable>/<variable>.root". The
+    target era is the outer level because the same source era appears under several of
+    them with different edges and they must not overwrite each other. The members are kept
+    in their own files rather than summed here: the datacard step sums them, and a per-era
+    lnN can only be built by scaling a sub-era's own shape, which a pre-summed shape no
+    longer has.
     """
     cfg = load_config(config_path)
     # The pattern that names the sliced categories comes from the binning configuration
@@ -978,6 +996,13 @@ def run(
     )
     model = cfg["model"]
 
+    # A group era is built from its members; a plain era is built from itself.
+    source_eras = cfg["era_groups"].get(era, [era])
+    if era in cfg["era_groups"]:
+        print(f"{era} is a group of {source_eras}: binning on their summed statistics")
+    else:
+        print(f"{era} is a standalone era: binning on its own statistics")
+
     record = {
         "slice_var": knobs["slice_var"],
         "category_pattern": cfg["naming"].pattern,
@@ -987,21 +1012,28 @@ def run(
     by_mass = record["binning"].setdefault(era, {})
 
     for mass in cfg["mass_values"]:
-        file_name = model.getInputFileName(era, {cfg["signal_param_name"]: mass})
-        in_file = open_input_file(input_dir, model, era, mass, cfg["signal_param_name"])
-        discovery_files = [
-            open_input_file(input_dir, model, disc_era, mass, cfg["signal_param_name"])
-            for disc_era in discovery_eras
-        ]
+        # One handle per source era, used both to discover the edges and to write the
+        # shapes -- so the binning is derived from exactly the statistics it is applied to.
+        sources = []
+        for src in source_eras:
+            in_file = open_input_file(
+                input_dir, model, src, mass, cfg["signal_param_name"]
+            )
+            # getInputFileName() yields "<src>/<variable>/<variable>.root"; nesting that
+            # under the target era gives "<era>/<src>/<variable>/<variable>.root".
+            out_path = os.path.join(
+                output_dir,
+                era,
+                model.getInputFileName(src, {cfg["signal_param_name"]: mass}),
+            )
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            sources.append((src, in_file, ROOT.TFile.Open(out_path, "RECREATE")))
+        discovery_files = [f for _, f, _ in sources]
 
-        # getInputFileName() already yields "<era>/<variable>/<variable>.root", which is
-        # exactly the layout --output is meant to hold, so it is used as-is: --input and
-        # --output are the same shape and the result can be read as a merged-hist tree.
-        out_path = os.path.join(output_dir, file_name)
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        out_file = ROOT.TFile.Open(out_path, "RECREATE")
-
-        print(f"Rebinning era={era} MX={mass} -> {out_path}")
+        print(
+            f"Rebinning {era} MX={mass} from {len(sources)} source era(s) -> "
+            f"{os.path.join(output_dir, era)}"
+        )
         by_channel = by_mass.setdefault(str(mass), {})
         for channel in cfg["channels"]:
             for category in cfg["categories"]:
@@ -1009,8 +1041,7 @@ def run(
                 if frozen_binning is not None:
                     frozen = lookup_frozen(frozen_binning, era, mass, channel, category)
                 used = process_category(
-                    in_file,
-                    out_file,
+                    sources,
                     channel,
                     category,
                     cfg,
@@ -1023,18 +1054,36 @@ def run(
                 if used is not None:
                     by_channel.setdefault(channel, {})[category] = used
 
-        out_file.Close()
-        in_file.Close()
-        for f in discovery_files:
-            f.Close()
+        for _, in_file, out_file in sources:
+            out_file.Close()
+            in_file.Close()
 
     # Written next to the shapes rather than beside the script: the binning belongs to the
     # production it produced, and --binning replays it onto the same input.
+    #
+    # Merged into whatever is already there rather than overwriting it. A production is
+    # built one era at a time into a shared tree, so each run holds only its own era and a
+    # plain write would leave the file describing whichever era finished last -- with the
+    # other three silently missing, and a --binning replay of them quietly falling back to
+    # re-optimising.
     json_path = os.path.join(output_dir, BINNING_JSON)
     os.makedirs(output_dir, exist_ok=True)
+    if os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            existing = json.load(f)
+        for key in ("slice_var", "category_pattern"):
+            if existing.get(key) != record[key]:
+                raise RuntimeError(
+                    f"{json_path} records {key}={existing.get(key)!r}, but this run used "
+                    f"{record[key]!r}. The eras of one production have to agree, or the "
+                    "categories they wrote do not line up."
+                )
+        existing["binning"].update(record["binning"])
+        existing["knobs"] = record["knobs"]
+        record = existing
     with open(json_path, "w") as f:
         json.dump(record, f, indent=2, sort_keys=True)
-    print(f"Wrote {json_path}")
+    print(f"Wrote {json_path} ({', '.join(sorted(record['binning']))})")
 
 
 if __name__ == "__main__":
@@ -1082,16 +1131,14 @@ if __name__ == "__main__":
         "production reproduced. The knobs are then unused",
     )
     parser.add_argument(
-        "--era", required=True, type=str, help="era to rebin and write out"
-    )
-    parser.add_argument(
-        "--discovery-eras",
-        required=False,
+        "--era",
+        required=True,
         type=str,
-        default=None,
-        help="comma-separated eras summed to discover bin edges (defaults to --era alone)."
-        " Summing an era group is what lets a combined fit use bins its single eras could "
-        "not support",
+        help="the era of the datacard configuration's `eras:` list to produce. A plain "
+        "era is binned on its own statistics; an era that is a key of `era_groups:` is "
+        "binned on its members' summed statistics and its shapes are that sum. Each is "
+        "written under its own era name, since a combination supports finer bins than "
+        "any single era and the two must not overwrite each other",
     )
 
     # Knob overrides. All default to None so that "not given" is distinguishable from
@@ -1178,16 +1225,11 @@ if __name__ == "__main__":
             frozen_binning = json.load(f)
         print(f"Replaying the binning recorded in {args.binning}; not optimising")
 
-    discovery_eras = (
-        args.discovery_eras.split(",") if args.discovery_eras else [args.era]
-    )
-
     run(
         args.input,
         args.output,
         args.config,
         args.era,
-        discovery_eras,
         knobs,
         frozen_binning=frozen_binning,
     )
