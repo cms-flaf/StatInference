@@ -35,15 +35,31 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         sub-eras for a meta-era, otherwise just [self.period]."""
         return self.get_era_groups().get(self.datacard_era, [self.period])
 
-    def input_hist_reqs(self):
-        """{key: task} for the shapes the cards are built from -- the merged histograms
-        of every sub-period of datacard_era.
+    def reads_rebinned(self):
+        """Whether the cards are built from a rebin_2d.py production.
 
-        Whether those shapes were rebinned is not this task's business. A 2D->1D
-        rebinning is a standalone pre-step (StatInference/bin_opt_2d/rebin_2d.py) that
-        writes the same Hists_merged layout, so consuming its output is a matter of
-        pointing --hists-version at that production.
+        Stated in global.yaml's StatInference block rather than inferred, because the two
+        trees differ in shape as well as name -- Hists_rebinned carries the target era as
+        a directory level -- and guessing wrong means reading a different binning than
+        the one asked for, which nothing downstream would notice.
         """
+        return bool(self.global_params["StatInference"].get("rebinned", False))
+
+    def input_hist_reqs(self):
+        """{key: task} for the shapes the cards are built from, over every sub-period of
+        datacard_era.
+
+        Either the raw merged histograms, or the output of the standalone 2D->1D
+        rebinning (StatInference/bin_opt_2d/rebin_2d.py). In the rebinned case the cards
+        are built from datacard_era's own binning, so that is the target era read.
+        """
+        if self.reads_rebinned():
+            return {
+                f"RebinnedHists_{era}_{variable}": req
+                for (era, variable), req in self.rebinned_hist_reqs(
+                    self.get_sub_periods(), self.datacard_era
+                ).items()
+            }
         return {
             f"MergedHists_{era}_{variable}": req
             for (era, variable), req in self.merged_hist_reqs(
@@ -80,7 +96,11 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         with contextlib.ExitStack() as stack:
             targets = {
                 key: req.output()
-                for key, req in self.merged_hist_reqs(self.get_sub_periods()).items()
+                for key, req in (
+                    self.rebinned_hist_reqs(self.get_sub_periods(), self.datacard_era)
+                    if self.reads_rebinned()
+                    else self.merged_hist_reqs(self.get_sub_periods())
+                ).items()
             }
             self.check_inputs(targets)
             base_dir_local = stack.enter_context(self.stage_inputs(targets))
