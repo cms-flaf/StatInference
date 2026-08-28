@@ -213,6 +213,23 @@ class DatacardMaker:
     def ECC(self):
         return itertools.product(self.eras, self.channels, self.categories)
 
+    def uncAppliesTo(self, unc, process, era, channel, category):
+        """Whether an uncertainty applies, with a meta-era inheriting its sub-eras'.
+
+        Uncertainty.appliesTo matches the era it is given against the uncertainty's own
+        `eras:` list, and a meta-era is not in it -- CMS_scale_j_2022 is scoped to
+        Run3_2022, and Run3_Early is not that string. Answering False is right at that
+        level; the meta-era is a fact this class knows and uncertainty.py does not.
+
+        A nuisance scoped to one sub-era does apply to the combination: it varies that
+        era's part of the summed shape. Without this every per-era shape systematic was
+        dropped from a meta-era card silently -- 64 of 76 for HH->bbWW, including the jet
+        energy scale and resolution. Per-era lnN escaped only because they are intercepted
+        for meta-eras earlier, in _addMetaEraLnNAsShapeUnc.
+        """
+        eras = self.getSubEras(era) if self.isMetaEra(era) else [era]
+        return any(unc.appliesTo(process, e, channel, category) for e in eras)
+
     def getCategoryGroups(self):
         """{"SR/res2b": ["SR/res2b_dnn0", ...]} -- the slices of one base category.
 
@@ -475,8 +492,22 @@ class DatacardMaker:
         combined_hist = None
 
         for sub_era in sub_eras:
+            # A per-era nuisance varies its own era and leaves the rest alone, so a sub-era
+            # it is not scoped to contributes its *nominal*. Two things depend on that: the
+            # variation only exists in its own era's file, so asking the others for it
+            # raises; and the summed Up shape has to carry the full yield, or its ratio to
+            # the nominal -- which is what the fit reads -- would be meaningless.
+            applies = unc_name is None or self.uncAppliesTo(
+                self.uncertainties[unc_name], process, sub_era, channel, category
+            )
             sub_hist = self._rawShape(
-                process, sub_era, channel, category, model_params, unc_name, unc_scale
+                process,
+                sub_era,
+                channel,
+                category,
+                model_params,
+                unc_name if applies else None,
+                unc_scale if applies else None,
             )
             if sub_hist is None:
                 continue
@@ -928,7 +959,7 @@ class DatacardMaker:
             uncApplies = (
                 unc_value != None
                 if isMVLnUnc
-                else unc.appliesTo(process, era, channel, category)
+                else self.uncAppliesTo(unc, process, era, channel, category)
             )
             if not uncApplies:
                 continue
@@ -1023,7 +1054,7 @@ class DatacardMaker:
                     uncApplies = (
                         (unc_value is not None)
                         if isMVLnUnc
-                        else unc.appliesTo(process, era, channel, category)
+                        else self.uncAppliesTo(unc, process, era, channel, category)
                     )
                     if not uncApplies:
                         continue
