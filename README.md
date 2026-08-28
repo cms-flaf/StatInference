@@ -10,25 +10,36 @@ binning of its own.
 
 **1. Shape-driven 2D→1D binning — `bin_opt_2d/rebin_2d.py`.** Derives bin edges from the
 shapes themselves (no fits, no limits): it cuts the x axis of a 2D input into slices that
-become datacard categories, and rebins y into the bins of each slice. Its knobs come from
-`bin_opt_2d/binning.yaml`; `bin_opt_2d/call_rebin_2d.sh` is a worked example.
+become datacard categories, and rebins y into the bins of each slice. It writes the
+rebinned shapes as `<output>/<source era>/<variable>/<variable>.root`, plus the
+`binning.json` recording the edges it chose, beside them.
 
-Its only product is a `binning.json`, one per era of the datacard configuration's `eras:`
-list, written to `<output>/<era>/`. It writes no shapes: `dc_make/binner.py` applies the
-recorded edges to the merged 2D histograms when the cards are built, so the configuration
-consumes a binning the same way it always has, through `hist_bins`. Nothing intermediate
-is stored and nothing can go stale against the binning that describes it.
+It runs as the datacard configuration's **preprocessing step**, not as part of this
+repository's logic. `PreprocessShapesTask` runs whatever `preprocess:` names, supplying
+`--input`, `--output` and `--era`; nothing here knows what the step does, and a
+configuration that declares no `preprocess:` block skips the task entirely and reads the
+merged histograms as they are:
 
-Which era a file is for decides how it was derived. A plain era is binned on its own
+```yaml
+preprocess:
+  script: StatInference/bin_opt_2d/rebin_2d.py
+  args: [--binning-config, config/Datacards/binning_2d.yaml]
+```
+
+The knobs live with the analysis (`config/Datacards/binning_2d.yaml`) because they are
+analysis configuration; the derived `binning.json` lives with the shapes it produced,
+because it is a product of the run rather than an input to it.
+
+Which era is being produced decides how it is derived. A plain era is binned on its own
 statistics, for a standalone limit; an era that is a key of `era_groups:` is binned on its
-members' summed statistics. A combination supports finer bins than any single era, so the
-two are genuinely different and each gets its own file.
+members' summed statistics, and those edges are then applied to each member separately --
+kept in their own files, because the datacard step sums them and a per-era lnN can only be
+built by scaling a sub-era's own shape.
 
 Each base category (`SR/res2b`) becomes per-slice categories named by the `category_pattern`
 knob, e.g. `{base_category}_dnn{slice_idx}`. The pattern is the analysis's choice — nothing
 here assumes the sliced axis is a DNN score. `common/tools.py:CategoryNaming` both writes
-those names and parses them back from that one pattern, and the record carries the pattern
-it used, so `Binner` reads a name apart exactly as it was written.
+those names and parses them back from that one pattern.
 
 **2. Limit-driven binning optimisation — `bin_opt/`.** A search harness, documented below:
 it builds candidate binnings, runs limits with combine for each, and ranks them. Its product

@@ -74,6 +74,14 @@ class StatInferenceTask(Task):
         """
         return os.path.join(self.ana_data_path(), self.version, "Datacards", era)
 
+    def preprocess_config(self):
+        """The datacard configuration's `preprocess:` block, or None.
+
+        None means the chain reads the merged histograms as they are -- an analysis that
+        needs no transformation declares nothing and PreprocessShapesTask never runs.
+        """
+        return self.get_config_data().get("preprocess") or None
+
     def get_era_groups(self):
         return self.get_config_data().get("era_groups", {})
 

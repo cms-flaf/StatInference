@@ -10,6 +10,7 @@ from FLAF.run_tools.law_customizations import HTCondorWorkflow, copy_param
 
 from StatInference.common.tools import CategoryNaming
 
+from .PreprocessShapesTask import PreprocessShapesTask
 from .StatInferenceTask import StatInferenceTask
 
 
@@ -38,14 +39,18 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         return self.get_era_groups().get(self.datacard_era, [self.period])
 
     def input_hist_reqs(self):
-        """{key: task} for the shapes the cards are built from, over every sub-period of
-        datacard_era.
+        """{key: task} for the shapes the cards are built from.
 
-        Always the raw merged histograms. A 2D->1D rebinning is a standalone pre-step
-        (StatInference/bin_opt_2d/rebin_2d.py), but it produces only the binning, which
-        the datacard step applies through hist_bins -- so there is one input tree here
-        and no second kind of production to know about.
+        The configuration's `preprocess:` step if it declares one, otherwise the merged
+        histograms directly. Either way what arrives is "<era>/<variable>/<variable>.root",
+        so nothing below here knows which it got.
         """
+        if self.preprocess_config():
+            return {
+                "PreprocessShapes": PreprocessShapesTask.req(
+                    self, meta_era=self.meta_era, branches=()
+                )
+            }
         return {
             f"MergedHists_{era}_{variable}": req
             for (era, variable), req in self.merged_hist_reqs(
@@ -88,12 +93,21 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             self.ana_path(), "StatInference", "dc_make", "create_datacards.py"
         )
         with contextlib.ExitStack() as stack:
-            targets = {
-                key: req.output()
-                for key, req in self.merged_hist_reqs(self.get_sub_periods()).items()
-            }
-            self.check_inputs(targets)
-            base_dir_local = stack.enter_context(self.stage_inputs(targets))
+            if self.preprocess_config():
+                # PreprocessShapesTask already wrote the "<era>/<variable>/<variable>.root"
+                # layout, so its output directory is the base input_file_pattern resolves
+                # against -- nothing to stage.
+                reqs = self.input_hist_reqs()["PreprocessShapes"]
+                base_dir_local = stack.enter_context(reqs.output().localize("r"))
+            else:
+                targets = {
+                    key: req.output()
+                    for key, req in self.merged_hist_reqs(
+                        self.get_sub_periods()
+                    ).items()
+                }
+                self.check_inputs(targets)
+                base_dir_local = stack.enter_context(self.stage_inputs(targets))
             local_output = stack.enter_context(self.output().localize("w"))
             cmd = [
                 "python3",

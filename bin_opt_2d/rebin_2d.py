@@ -72,7 +72,7 @@ def load_binning_config(path, overrides=None):
     return knobs
 
 
-def lookup_frozen(frozen_binning, mass, channel, category):
+def lookup_frozen(frozen_binning, era, mass, channel, category):
     """The recorded binning for one channel/category, or None if it was skipped then.
 
     A category absent from the record was skipped by the run that wrote it (too little
@@ -82,6 +82,7 @@ def lookup_frozen(frozen_binning, mass, channel, category):
     """
     return (
         frozen_binning.get("binning", {})
+        .get(era, {})
         .get(str(mass), {})
         .get(channel, {})
         .get(category)
@@ -708,6 +709,21 @@ def bin_edges(y_axis, y_ranges):
     return edges
 
 
+def mkdir_titled(directory, path, title):
+    """mkdir a nested path, putting `title` on the leaf directory only.
+
+    TDirectory.mkdir() given a slashed path applies the title to the *first* level and
+    hands the rest of the path down as the sub-levels' titles, so every parent ends up
+    labelled with a stale fragment of whichever slice was created first -- the output
+    currently has "muMu" titled "muMu/SR/res2b_dnn0". Walking the components keeps the
+    parents clean and puts the label where it belongs.
+    """
+    parts = path.split("/")
+    for part in parts[:-1]:
+        directory = directory.GetDirectory(part) or directory.mkdir(part)
+    return directory.mkdir(parts[-1], title)
+
+
 def format_var_range(lo, hi, var):
     """One slice's edges on the sliced axis as a selection label, e.g. "1.20 < DNN < 4.50".
 
@@ -799,25 +815,63 @@ def record_to_slices(record, x_axis, y_axis, where):
     ]
 
 
-def discover_category(
-    channel, category, cfg, mass, era, discovery_files, knobs, frozen=None
+def rebin_hist_2d(hist2d, slices, name, naming):
+    """Given the discovered slice structure, produce one final TH1 per slice
+    for this specific histogram (nominal or a systematic variation)."""
+    outputs = []
+    for slice_idx, sl in enumerate(slices):
+        xlo, xhi = sl["x_range"]
+        edges = array.array("d", bin_edges(hist2d.GetYaxis(), sl["y_ranges"]))
+        # Detached for the same reason as the projections above: Write() targets
+        # gDirectory regardless, so nothing needs these to stay attached.
+        h = _detach(
+            ROOT.TH1D(
+                naming.name(name, slice_idx),
+                name,
+                len(edges) - 1,
+                edges,
+            )
+        )
+        for bin_idx, (ylo, yhi) in enumerate(sl["y_ranges"], start=1):
+            err = array.array("d", [0.0])
+            content = hist2d.IntegralAndError(xlo, xhi, ylo, yhi, err)
+            h.SetBinContent(bin_idx, content)
+            h.SetBinError(bin_idx, err[0])
+        outputs.append(h)
+    return outputs
+
+
+def process_category(
+    sources,
+    channel,
+    category,
+    cfg,
+    mass,
+    era,
+    discovery_files,
+    knobs,
+    frozen=None,
 ):
-    """The binning for one channel/category, or None if it cannot be binned.
+    """Rebin one channel/category, returning the binning it used (None if skipped).
 
-    Derived from `discovery_files` -- this era's own shapes, or every member of a group
-    era summed. Nothing is written: the edges are the product, and the datacard step
-    applies them to the raw 2D shapes when it builds the cards.
+    The edges are discovered once from `discovery_files` -- every source era summed -- and
+    then applied to each source era separately, so a group era's members are cut on the
+    combination's statistics but stay in their own files. The datacard step still sums
+    them, which is what keeps a per-era lnN expressible: scaling one sub-era's own shape
+    needs that sub-era to still exist as a shape.
 
-    With `frozen` given the edges are replayed from a previous binning.json and no
-    optimisation happens; the discovery files are then only read for the axes.
+    `sources` is [(source_era, in_file, out_file)]; for a plain era there is one.
+
+    With `frozen` given the edges are replayed from a previous run's binning.json and no
+    optimisation happens at all; the discovery files are then only read for the axes.
     """
     min_signal = knobs["min_signal"]
     prefix = f"{channel}/{category}/"
     # The key list comes from the first source era; a systematic that only some eras carry
     # is filled in from their nominal by sum_over_sources().
-    cat_dir = discovery_files[0].Get(f"{channel}/{category}")
+    cat_dir = sources[0][1].Get(f"{channel}/{category}")
     if not cat_dir:
-        print(f"  [skip] {channel}/{category}: not in {discovery_files[0].GetName()}")
+        print(f"  [skip] {channel}/{category}: not found in {sources[0][1].GetName()}")
         return
 
     signal_keys = [
@@ -878,12 +932,30 @@ def discover_category(
     # slice directory's own title, so it travels with the histograms and there is no
     # side-car path to hand a reader correctly and no key name for the two ends to agree
     # on -- anything that can open the shapes can already read it.
+    naming = cfg["naming"]
     ranges = slice_ranges(disc_sig.GetXaxis(), slices)
-    record = slices_to_record(slices, disc_sig.GetXaxis(), disc_sig.GetYaxis())
-    # The selection each slice stands for, for whoever reads the record or labels a plot.
-    for entry, (lo, hi) in zip(record["slices"], ranges):
-        entry["selection"] = format_var_range(lo, hi, var=cfg["slice_var"])
-    return record
+
+    # One shared set of edges, applied to every source era in its own file.
+    for source_era, in_file, out_file in sources:
+        for slice_idx in range(len(slices)):
+            mkdir_titled(
+                out_file,
+                f"{channel}/{naming.name(category, slice_idx)}",
+                format_var_range(*ranges[slice_idx], var=cfg["slice_var"]),
+            )
+        cat_dir = in_file.Get(f"{channel}/{category}")
+        if not cat_dir:
+            print(f"  [skip] {source_era} {channel}/{category}: not in the input")
+            continue
+        for key in [k.GetName() for k in cat_dir.GetListOfKeys()]:
+            hist2d = get_hist(in_file, prefix + key)
+            if hist2d is None or hist2d.GetDimension() != 2:
+                continue
+            for slice_idx, h in enumerate(rebin_hist_2d(hist2d, slices, key, naming)):
+                out_file.cd(f"{channel}/{naming.name(category, slice_idx)}")
+                h.Write(key)
+
+    return slices_to_record(slices, disc_sig.GetXaxis(), disc_sig.GetYaxis())
 
 
 def run(
@@ -901,12 +973,12 @@ def run(
     summed statistics -- a combination supports finer bins than any single era can -- and
     those edges are then applied to each member separately.
 
-    Output layout is "<output_dir>/<era>/<source_era>/<variable>/<variable>.root". The
-    target era is the outer level because the same source era appears under several of
-    them with different edges and they must not overwrite each other. The members are kept
-    in their own files rather than summed here: the datacard step sums them, and a per-era
-    lnN can only be built by scaling a sub-era's own shape, which a pre-summed shape no
-    longer has.
+    Output layout is "<output_dir>/<source_era>/<variable>/<variable>.root", plus the
+    binning.json that produced it. One era per --output directory, since the same source
+    era carries different edges under different target eras and they must not overwrite
+    each other. The members are kept in their own files rather than summed here: the
+    datacard step sums them, and a per-era lnN can only be built by scaling a sub-era's
+    own shape, which a pre-summed shape no longer has.
     """
     cfg = load_config(config_path)
     # The pattern that names the sliced categories comes from the binning configuration
@@ -933,44 +1005,65 @@ def run(
         print(f"{era} is a standalone era: binning on its own statistics")
 
     record = {
-        "era": era,
-        "source_eras": source_eras,
         "slice_var": knobs["slice_var"],
         "category_pattern": cfg["naming"].pattern,
         "knobs": {k: v for k, v in sorted(knobs.items())},
         "binning": {},
     }
+    by_mass = record["binning"].setdefault(era, {})
 
     for mass in cfg["mass_values"]:
-        # The statistics the edges are derived from: this era's own for a plain era, its
-        # members' summed for a group era.
-        discovery_files = [
-            open_input_file(input_dir, model, src, mass, cfg["signal_param_name"])
-            for src in source_eras
-        ]
-        print(f"Deriving {era} binning at MX={mass} from {len(discovery_files)} era(s)")
-        by_channel = record["binning"].setdefault(str(mass), {})
+        # One handle per source era, used both to discover the edges and to write the
+        # shapes -- so the binning is derived from exactly the statistics it is applied to.
+        sources = []
+        for src in source_eras:
+            in_file = open_input_file(
+                input_dir, model, src, mass, cfg["signal_param_name"]
+            )
+            # getInputFileName() yields "<src>/<variable>/<variable>.root", which is
+            # the layout input_file_pattern resolves against. --output is one era's own
+            # directory, so the era being produced is not repeated inside it.
+            out_path = os.path.join(
+                output_dir,
+                model.getInputFileName(src, {cfg["signal_param_name"]: mass}),
+            )
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            sources.append((src, in_file, ROOT.TFile.Open(out_path, "RECREATE")))
+        discovery_files = [f for _, f, _ in sources]
+
+        print(
+            f"Rebinning {era} MX={mass} from {len(sources)} source era(s) -> "
+            f"{os.path.join(output_dir, era)}"
+        )
+        by_channel = by_mass.setdefault(str(mass), {})
         for channel in cfg["channels"]:
             for category in cfg["categories"]:
                 frozen = None
                 if frozen_binning is not None:
-                    frozen = lookup_frozen(frozen_binning, mass, channel, category)
-                used = discover_category(
-                    channel, category, cfg, mass, era, discovery_files, knobs, frozen
+                    frozen = lookup_frozen(frozen_binning, era, mass, channel, category)
+                used = process_category(
+                    sources,
+                    channel,
+                    category,
+                    cfg,
+                    mass,
+                    era,
+                    discovery_files,
+                    knobs,
+                    frozen=frozen,
                 )
                 if used is not None:
                     by_channel.setdefault(channel, {})[category] = used
 
-        for f in discovery_files:
-            f.Close()
+        for _, in_file, out_file in sources:
+            out_file.Close()
+            in_file.Close()
 
-    # Written inside the era's own directory, beside the shapes it describes. One era's
-    # binning has nothing to say about another's -- they are derived from different
-    # statistics -- so each owns its file, a re-run of one era cannot disturb another, and
-    # --binning replays a record by pointing at the era it belongs to.
-    era_dir = os.path.join(output_dir, era)
-    os.makedirs(era_dir, exist_ok=True)
-    json_path = os.path.join(era_dir, BINNING_JSON)
+    # Written beside the shapes it describes, in the same output as them: the binning is
+    # a product of this run, not configuration, so it travels with what it produced and a
+    # reader never has to work out which binning a set of shapes came from.
+    os.makedirs(output_dir, exist_ok=True)
+    json_path = os.path.join(output_dir, BINNING_JSON)
     with open(json_path, "w") as f:
         json.dump(record, f, indent=2, sort_keys=True)
     print(f"Wrote {json_path}")
@@ -998,7 +1091,7 @@ if __name__ == "__main__":
         "--output",
         required=True,
         type=str,
-        help="directory to write <era>/" + BINNING_JSON + " into",
+        help="output base directory, mirrors --input layout",
     )
     parser.add_argument(
         "--config", required=True, type=str, help="datacard configuration yaml"
