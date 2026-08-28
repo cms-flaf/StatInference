@@ -4,16 +4,16 @@ import luigi
 from FLAF.Analysis.tasks import HistPlotTask
 
 from .StatInferenceTask import StatInferenceTask
-from .PlotResonantLimitsTask import PlotResonantLimitsTask
+from .ResonantLimitsTask import ResonantLimitsTask
 
 
 class ResonantLimitsAndHistPlotTask(StatInferenceTask):
-    """Everything an analyst wants from one `law run`: the limits, the limit plots, and
-    the plots of the histograms that went into them.
+    """The limits, and the plots of the histograms that went into them, from one
+    `law run`.
 
-    Depends on PlotResonantLimitsTask rather than ResonantLimitsTask -- the plots are the
-    product worth asking for, and PlotResonantLimitsTask pulls the limits in behind it, so
-    naming the limits here as well would only be a second path to the same task.
+    Depends on ResonantLimitsTask, not PlotResonantLimitsTask: this task is about getting
+    the limits together with their input histograms, and the limit plots the configuration
+    declares in `limit_plots` are asked for separately, by running PlotResonantLimitsTask.
     """
 
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
@@ -33,7 +33,7 @@ class ResonantLimitsAndHistPlotTask(StatInferenceTask):
         return [e for e in eras if e not in era_groups]
 
     def requires(self):
-        reqs = [PlotResonantLimitsTask.req(self)]
+        reqs = [ResonantLimitsTask.req(self)]
         for e in self.get_plottable_eras():
             reqs.append(HistPlotTask.req(self, period=e))
         return reqs
