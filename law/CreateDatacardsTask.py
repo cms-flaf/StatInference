@@ -107,43 +107,114 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                     base_dir_local.abspath, config, local_output.abspath
                 )
 
-    def plot_rebinned_shapes(self, base_dir, config, output_dir):
-        """Stacked plots of the sub-era-summed rebinned shapes, one per datacard bin.
+    def plot_variable(self, variable):
+        """The variable whose axis the shapes are binned along, for histograms.yaml.
 
-        Runs in the default env rather than cmssw_env: the plotter needs FLAF's PlotKit
+        For input a 2D->1D rebinning produced, that is the y variable of the 2D entry --
+        histograms.yaml records both as ``var_list: [x, y]``, so the axis metadata the
+        plotter needs is already described and does not have to be restated here. For
+        input that was always 1D, the variable is its own answer.
+        """
+        try:
+            import FLAF.Common.Setup as Setup
+
+            hists = Setup.Setup(self.ana_path(), self.period, self.version).hists
+            var_list = hists[variable].get("var_list")
+            if var_list and len(var_list) > 1:
+                return var_list[1]
+        except Exception as e:
+            print(f"Warning: no var_list for {variable} ({e}); plotting it as itself")
+        return variable
+
+    def plot_rebinned_shapes(self, base_dir, config, output_dir):
+        """Stacked plots of the shapes the cards are built from, one per datacard bin.
+
+        Runs FLAF's own HistPlotter.py -- the script HistPlotTask uses -- rather than a
+        plotter of our own, so these come out in the same style as every other plot in the
+        analysis and there is one implementation to maintain. It is agnostic about which
+        categories exist: it plots whatever `channel:category:region` keys it is handed,
+        so the sliced names need nothing on the FLAF side.
+
+        Runs in the default env rather than cmssw_env: the plotter needs PlotKit
         (matplotlib/mplhep), same as HistPlotTask.
         """
-        plot_py = os.path.join(
-            self.ana_path(), "StatInference", "dc_make", "plot_rebinned.py"
-        )
-        cmd = [
-            "python3",
-            plot_py,
-            "--input",
-            base_dir,
-            "--output",
-            os.path.join(output_dir, "plots"),
-            "--config",
-            config,
-            "--eras",
-            ",".join(self.get_sub_periods()),
-            "--era-label",
-            self.datacard_era,
-            "--ana-path",
-            self.ana_path(),
-            "--version",
-            self.version,
-            "--signal-scale",
-            str(self.global_params.get("signal_plot_scale", "bkg")),
-            # The slices span ~5 decades in yield (the low-significance slice holds
-            # most of the background), so a linear axis hides everything but slice 0.
-            "--log-y",
-        ]
-        try:
-            ps_call(cmd, verbose=1)
-        except Exception as e:
-            # The datacards are the product that matters; a plotting failure should be
-            # loud but must not leave the task looking broken with valid cards on disk.
-            print(
-                f"WARNING: rebinned-shape plotting failed, datacards are unaffected: {e}"
-            )
+        import glob
+
+        cfg = self.get_config_data()
+        plots_dir = os.path.join(output_dir, "plots")
+        os.makedirs(plots_dir, exist_ok=True)
+        plotter = os.path.join(self.ana_path(), "FLAF", "Analysis", "HistPlotter.py")
+
+        # The datacard bin is the sum over the sub-eras (getCombinedShape does the same at
+        # card-build time), so the sub-era files are hadd'ed into the one file the plotter
+        # reads. Plotting them separately would show something the fit never sees.
+        for variable in self.get_required_variables():
+            inputs = [
+                p
+                for era in self.get_sub_periods()
+                for p in glob.glob(
+                    os.path.join(base_dir, era, variable, f"{variable}.root")
+                )
+            ]
+            if not inputs:
+                continue
+            summed = os.path.join(plots_dir, f"_summed_{variable}.root")
+            keys, outputs = [], []
+            for category in cfg["categories"]:
+                # "SR/res2b_dnn0" -> region "SR", category "res2b_dnn0": HistPlotter
+                # navigates channel -> region -> category.
+                region, _, cat = category.rpartition("/")
+                for channel in cfg["channels"]:
+                    keys.append(f"{channel}:{cat}:{region}")
+                    outputs.append(
+                        os.path.join(
+                            plots_dir, f"{variable}_{channel}_{region}_{cat}.pdf"
+                        )
+                    )
+            cmd = [
+                "python3",
+                plotter,
+                "--inFile",
+                summed,
+                "--all_outFiles",
+                ",".join(outputs),
+                "--all_keys",
+                ",".join(keys),
+                "--globalConfig",
+                os.path.join(
+                    self.ana_path(),
+                    self.global_params["analysis_config_area"],
+                    "global.yaml",
+                ),
+                # The surviving axis of the rebinned shapes, and already at its final
+                # binning -- so no --rebin, which would coarsen it back to the histograms.yaml
+                # grid and undo the whole point of the rebinning.
+                "--var",
+                self.plot_variable(variable),
+                "--year",
+                self.period,
+                "--ana_path",
+                self.ana_path(),
+                "--period",
+                self.period,
+                "--LAWrunVersion",
+                self.version,
+                "--wantSignals",
+                # The slices span ~5 decades in yield (the low-significance slice holds
+                # most of the background), so a linear axis hides everything but slice 0.
+                "--wantLogScale",
+                "y",
+            ]
+            try:
+                ps_call(["hadd", "-f", summed] + inputs, verbose=1)
+                ps_call(cmd, verbose=1)
+            except Exception as e:
+                # The datacards are the product that matters; a plotting failure should be
+                # loud but must not leave the task looking broken with valid cards on disk.
+                print(
+                    f"WARNING: shape plotting failed for {variable}, "
+                    f"datacards are unaffected: {e}"
+                )
+            finally:
+                if os.path.exists(summed):
+                    os.remove(summed)
