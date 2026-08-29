@@ -213,6 +213,29 @@ class DatacardMaker:
     def ECC(self):
         return itertools.product(self.eras, self.channels, self.categories)
 
+    @staticmethod
+    def lnNIsEraDependent(unc):
+        """Whether an lnN's value depends on which era it is applied to.
+
+        Only an era-dependent lnN needs the meta-era shape treatment. One that applies
+        uniformly -- no `eras:` anywhere in its entry -- scales the whole summed yield by
+        the same factor, which is what an lnN already says, so turning it into a template
+        buys nothing and states the same uncertainty a different way: combine morphs a
+        shape and takes an lnN as an exact log-normal.
+
+        For MultiValueLnNUncertainty the eras are read off the value keys, not off
+        `unc.eras`. Uncertainty.fromConfig reassigns its `args` dict inside the sub-entry
+        loop and passes the result to the constructor, so a multi-value entry carries
+        whatever the *last* sub-entry happened to scope by -- top_mass ends up with
+        processes ('ST',) and lumi_1_13p6TeV with the 2023 eras. Nothing reads those today
+        (addUncertainty decides multi-value applicability from getUncertaintyForProcess),
+        but they are not to be trusted.
+        """
+        if isinstance(unc, MultiValueLnNUncertainty):
+            # key is (processes, eras, channels, categories), built in fromConfig.
+            return any(key[1] for key in unc.values)
+        return bool(unc.eras)
+
     def uncAppliesTo(self, unc, process, era, channel, category):
         """Whether an uncertainty applies, with a meta-era inheriting its sub-eras'.
 
@@ -936,8 +959,10 @@ class DatacardMaker:
                 ):
                     continue
 
-            if self.isMetaEra(era) and isinstance(
-                unc, (LnNUncertainty, MultiValueLnNUncertainty)
+            if (
+                self.isMetaEra(era)
+                and isinstance(unc, (LnNUncertainty, MultiValueLnNUncertainty))
+                and self.lnNIsEraDependent(unc)
             ):
                 self._addMetaEraLnNAsShapeUnc(
                     unc_name,
