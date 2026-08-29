@@ -79,6 +79,11 @@ class DhiPlotMixin:
             elif key == "multi_datacards":
                 # colon between datacard sequences, comma within one
                 cmd += [flag, ":".join(",".join(seq) for seq in value)]
+            elif isinstance(value, (tuple, list)) and all(
+                isinstance(v, (tuple, list)) and len(v) == 2 for v in value
+            ):
+                # dhi's MultiCSVParameter pairs, e.g. parameter_values ("r", 6.8) -> r=6.8
+                cmd += [flag, ",".join(f"{a}={b}" for a, b in value)]
             elif isinstance(value, (tuple, list)):
                 cmd += [flag, ",".join(str(v) for v in value)]
             else:

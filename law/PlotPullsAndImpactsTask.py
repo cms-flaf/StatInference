@@ -7,7 +7,9 @@ import re
 
 from string import Template
 
+from FLAF.RunKit.run_tools import ps_call
 from dhi.tasks.pulls_impacts import MergePullsAndImpacts, PlotPullsAndImpacts
+from dhi.tasks.resonant import MergeResonantLimits
 
 from .DhiPlotMixin import DhiPlotMixin
 from .StatInferenceTask import StatInferenceTask
@@ -85,6 +87,103 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
                 f"{pattern or 'combined_*.txt'}; it holds: {', '.join(found) or 'nothing'}."
             )
         return matched[0]
+
+    def card_family(self, entry, era):
+        """The datacard set an entry's card belongs to, as a MergeResonantLimits glob.
+
+        The limit is merged over a family of per-mass cards, so the family is what has to
+        be named to look one up -- the same glob the entry selects its own card from,
+        without the mass filter.
+        """
+        pattern = entry.get("glob")
+        if pattern:
+            return (
+                os.path.join(
+                    self.datacards_dir(era), Template(pattern).safe_substitute(ERA=era)
+                ),
+            )
+
+        # The combined card's own family, combined_*.txt, is a datacard set nobody has
+        # limits for -- asking for them starts a fresh workspace and fit per mass. The
+        # limits that do exist are the ones the limit plots merged, whose "Combined" curve
+        # globs an era's cards; with a single top-level era that is the same measurement
+        # the combined card makes.
+        eras = self.get_top_level_eras()
+        if len(eras) != 1:
+            raise RuntimeError(
+                f"impact_plots: poi_value 'limit' needs one top-level era to take the "
+                f"limit from, but the configuration has {eras}. Give the entry a number "
+                "instead."
+            )
+        return (os.path.join(self.datacards_dir(eras[0]), "*.txt"),)
+
+    def expected_limit(self, entry, era, mass):
+        """The expected limit on r at a mass, from the limits already computed for it.
+
+        The path comes from dhi's own task rather than being assembled here: the store
+        directory is a hash of the resolved datacard set. MergeResonantLimits is run if it
+        has not been already -- ResonantLimitsTask has produced the per-mass limits this
+        merges, so this is a merge and not a fit.
+        """
+        import numpy as np
+
+        sequence = self.card_family(entry, era)
+        target = MergeResonantLimits(
+            version=self.version, datacards=tuple(sequence)
+        ).output()
+        if not os.path.exists(target.path):
+            ps_call(
+                [
+                    "law",
+                    "run",
+                    "MergeResonantLimits",
+                    "--version",
+                    self.version,
+                    "--datacards",
+                    ",".join(sequence),
+                ],
+                cwd=self.ana_path(),
+                verbose=1,
+            )
+        if not os.path.exists(target.path):
+            raise RuntimeError(
+                f"impact_plots: no merged limits at {target.path} for {list(sequence)}, "
+                "so poi_value: limit cannot be resolved. Set a number instead."
+            )
+        data = np.load(target.path, allow_pickle=True)["data"]
+        for row in data:
+            if int(row["mhh"]) == int(mass):
+                return float(row["limit"])
+        raise RuntimeError(
+            f"impact_plots: the merged limits at {target.path} carry no mass {mass}; "
+            f"they hold {sorted({int(r['mhh']) for r in data})}."
+        )
+
+    # The parameter the ranking is of. dhi's own default for a resonant search.
+    poi_name = "r"
+
+    def poi_value(self, entry, era, mass):
+        """The value of r the Asimov dataset is built at, or None to leave dhi's default.
+
+        This matters more than it looks. dhi builds the Asimov at r=1 unless told
+        otherwise, and r=1 is not a meaningful reference at either end of this scan: where
+        the limit is ~7 it is an almost invisible signal, so the ranking is really the
+        background-only one, and where the limit is ~0.16 it is several times more signal
+        than could be excluded, which pins r and collapses every impact towards zero.
+        Ranking at the limit puts the fit where the measurement actually is.
+
+        Note this cannot go through dhi's `parameter_values`: for a resonant search
+        hh_model is NO_STR, and POITask then hard-codes both the joined parameter values
+        ('""') and the output postfix (r=1.0), so the value would be silently dropped. It
+        has to reach combine as --expectSignal through PullsAndImpacts' custom_args, which
+        is significant and so does change the fit's output path.
+        """
+        value = entry.get("poi_value")
+        if value is None:
+            return None
+        if value == "limit":
+            return self.expected_limit(entry, era, mass)
+        return float(value)
 
     def build_plot_spec(self, entry, era, mass):
         """PlotPullsAndImpacts parameters for an entry and mass point.
@@ -193,13 +292,20 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
                         os.makedirs(dest_dir, exist_ok=True)
 
                         spec = self.build_plot_spec(entry, era, mass)
+                        extra = list(entry.get("dhi_args") or ())
+                        poi = self.poi_value(entry, era, mass)
+                        if poi is not None:
+                            extra.append(
+                                "--PullsAndImpacts-custom-args="
+                                f"--expectSignal={poi:.4g}"
+                            )
                         basenames = self.draw_plot(
                             PlotPullsAndImpacts,
                             spec,
                             name,
                             f"{era} mass {mass}",
                             dest_dir,
-                            extra_args=entry.get("dhi_args") or (),
+                            extra_args=extra,
                         )
                         self.report_dropped_parameters(entry, era, mass, spec)
                         produced.extend(os.path.join(rel, b) for b in basenames)
