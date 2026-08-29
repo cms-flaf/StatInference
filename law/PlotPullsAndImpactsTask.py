@@ -5,6 +5,8 @@ import luigi
 import os
 import re
 
+from string import Template
+
 from dhi.tasks.pulls_impacts import MergePullsAndImpacts, PlotPullsAndImpacts
 
 from .DhiPlotMixin import DhiPlotMixin
@@ -40,23 +42,51 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
     def output(self):
         return self.output_dir_target(self.version, "ImpactPlots")
 
-    def combined_card(self, mass):
-        """The combined datacard for a mass, or a useful error naming what does exist."""
-        path = os.path.join(self.datacards_dir("combined"), f"combined_{mass}.txt")
-        if not os.path.exists(path):
-            available = sorted(
-                re.sub(r"^combined_|\.txt$", "", os.path.basename(p))
-                for p in glob.glob(
-                    os.path.join(self.datacards_dir("combined"), "combined_*.txt")
-                )
-            )
-            raise RuntimeError(
-                f"impact_plots: no combined card for mass {mass} at {path}. "
-                f"Available: {', '.join(available) or 'none'}."
-            )
-        return path
+    def entry_eras(self, entry):
+        """The eras an entry is drawn for.
 
-    def build_plot_spec(self, entry, mass):
+        An entry with a `glob:` addresses cards inside one era's directory, so it is
+        drawn once per era the configuration lists. The default combined card already
+        contains every era, so it is drawn once and labelled "combined".
+        """
+        return self.get_all_eras() if entry.get("glob") else ["combined"]
+
+    def card_for(self, entry, era, mass):
+        """The single datacard an entry's plot is built from.
+
+        PullsAndImpacts fits one card, not a glob -- every parameter gets its own
+        combine job against that one workspace -- so an entry's `glob:` and mass have to
+        resolve to exactly one file.
+        """
+        name = entry.get("name") or "impacts"
+        pattern = entry.get("glob")
+        if not pattern:
+            # The combined card ResonantLimitsTask writes: one per mass, every era in it.
+            base = self.datacards_dir("combined")
+            candidates = glob.glob(os.path.join(base, "combined_*.txt"))
+        else:
+            base = self.datacards_dir(era)
+            candidates = glob.glob(
+                os.path.join(base, Template(pattern).safe_substitute(ERA=era))
+            )
+
+        # Same convention dhi's datacard_pattern uses: the mass is the trailing number.
+        matched = [
+            p
+            for p in candidates
+            if (m := re.search(r"_(\d+)\.txt$", os.path.basename(p)))
+            and int(m.group(1)) == int(mass)
+        ]
+        if len(matched) != 1:
+            found = sorted(os.path.basename(p) for p in candidates)
+            raise RuntimeError(
+                f"impact_plots entry '{name}' ({era}, mass {mass}): expected exactly one "
+                f"datacard, found {len(matched)}. Looked in {base} for "
+                f"{pattern or 'combined_*.txt'}; it holds: {', '.join(found) or 'nothing'}."
+            )
+        return matched[0]
+
+    def build_plot_spec(self, entry, era, mass):
         """PlotPullsAndImpacts parameters for an entry and mass point.
 
         Kept as a plain dict so the same values can both construct the task (to learn
@@ -83,7 +113,7 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
 
         return dict(
             version=self.version,
-            datacards=(self.combined_card(mass),),
+            datacards=(self.card_for(entry, era, mass),),
             mass=float(mass),
             # PullsAndImpacts is a plain POITask, so hh_model defaults to the
             # non-resonant model_default -- which would fit r together with kl, kt, CV and
@@ -96,7 +126,7 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
             **{"hh_model": law.NO_STR, **plot_params},
         )
 
-    def report_dropped_parameters(self, entry, mass, spec):
+    def report_dropped_parameters(self, entry, era, mass, spec):
         """Warn about nuisances robustHesse removed from the fit.
 
         robustHesse drops a parameter it cannot invert, logs "Dropping <name> from the
@@ -118,7 +148,7 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
             fitted = {p["name"] for p in json.load(f).get("params", [])}
 
         card_params = set()
-        with open(self.combined_card(mass)) as f:
+        with open(self.card_for(entry, era, mass)) as f:
             for line in f:
                 parts = line.split()
                 if len(parts) >= 2 and parts[1] in ("shape", "lnN"):
@@ -128,7 +158,8 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
         if dropped:
             name = entry.get("name") or "impacts"
             print(
-                f"WARNING: impact_plots entry '{name}' (mass {mass}): {len(dropped)} "
+                f"WARNING: impact_plots entry '{name}' ({era}, mass {mass}): "
+                f"{len(dropped)} "
                 f"nuisance(s) are in the card but not in the fit, so they are missing "
                 f"from the plot without being marked: {', '.join(dropped)}. "
                 "With --method robust this is robustHesse dropping what it could not "
@@ -155,16 +186,22 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
                         "rather than defaulting to every mass in the model."
                     )
 
-                for mass in masses:
-                    dest_dir = os.path.join(local_output.abspath, str(mass))
-                    os.makedirs(dest_dir, exist_ok=True)
+                for era in self.entry_eras(entry):
+                    for mass in masses:
+                        rel = os.path.join(name, era, str(mass))
+                        dest_dir = os.path.join(local_output.abspath, rel)
+                        os.makedirs(dest_dir, exist_ok=True)
 
-                    spec = self.build_plot_spec(entry, mass)
-                    basenames = self.draw_plot(
-                        PlotPullsAndImpacts, spec, name, f"mass {mass}", dest_dir
-                    )
-                    self.report_dropped_parameters(entry, mass, spec)
-                    produced.extend(os.path.join(str(mass), b) for b in basenames)
+                        spec = self.build_plot_spec(entry, era, mass)
+                        basenames = self.draw_plot(
+                            PlotPullsAndImpacts,
+                            spec,
+                            name,
+                            f"{era} mass {mass}",
+                            dest_dir,
+                        )
+                        self.report_dropped_parameters(entry, era, mass, spec)
+                        produced.extend(os.path.join(rel, b) for b in basenames)
 
             with open(os.path.join(local_output.abspath, "impacts.json"), "w") as f:
                 json.dump(sorted(produced), f, indent=2)
