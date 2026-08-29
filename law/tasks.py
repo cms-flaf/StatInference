@@ -12,6 +12,7 @@ from .PreprocessShapesTask import PreprocessShapesTask
 from .CreateDatacardsTask import CreateDatacardsTask
 from .ResonantLimitsTask import ResonantLimitsTask
 from .PlotResonantLimitsTask import PlotResonantLimitsTask
+from .PlotPullsAndImpactsTask import PlotPullsAndImpactsTask
 from .ResonantLimitsAndHistPlotTask import ResonantLimitsAndHistPlotTask
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "CreateDatacardsTask",
     "ResonantLimitsTask",
     "PlotResonantLimitsTask",
+    "PlotPullsAndImpactsTask",
     "ResonantLimitsAndHistPlotTask",
 ]

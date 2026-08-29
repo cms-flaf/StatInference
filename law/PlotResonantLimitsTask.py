@@ -5,7 +5,6 @@ import luigi
 import math
 import os
 import re
-import shutil
 
 from string import Template
 from FLAF.RunKit.run_tools import ps_call
@@ -16,11 +15,12 @@ from dhi.tasks.resonant import (
     PlotResonantLimits,
 )
 
+from .DhiPlotMixin import DhiPlotMixin
 from .StatInferenceTask import StatInferenceTask
 from .ResonantLimitsTask import ResonantLimitsTask
 
 
-class PlotResonantLimitsTask(StatInferenceTask):
+class PlotResonantLimitsTask(DhiPlotMixin, StatInferenceTask):
     """The limit plots, declared in the datacard configuration.
 
     Each entry of the config's ``limit_plots`` block becomes one dhi
@@ -34,26 +34,11 @@ class PlotResonantLimitsTask(StatInferenceTask):
     cannot show. External limits and luminosity projections are separate curves rather than
     datacards, so they appear only on the overlay.
 
-    The dhi tasks are invoked as subprocesses rather than yielded as dynamic
-    dependencies. luigi round-trips a dynamic dependency through to_str_params() /
-    from_str_params(), and dhi declares lumi_scale as FloatParameter(default=None), whose
-    unset value serialises to "None" and then raises on float("None"). Going through the
-    command line keeps dhi unmodified: the default never leaves the plot process.
-
     The finished plots are copied to fs_default alongside the rest of the chain's
-    products. dhi still writes its own copy under inference/data/store, which is what makes
-    an already-drawn plot cheap to re-request; the fs_default copy is the durable one.
+    products; see DhiPlotMixin for how a dhi plot task is run and its output collected.
     """
 
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
-
-    # Forwarded to the dhi task as "--remove-output 0,a,y": depth 0 drops the plot itself
-    # and nothing below it, so no fit is recomputed.
-    redraw = luigi.BoolParameter(
-        default=False,
-        significant=False,
-        description="discard existing limit plots and draw them again",
-    )
 
     def requires(self):
         # ResonantLimitsTask is what mirrors the cards to datacards_dir(), which is what
@@ -85,18 +70,11 @@ class PlotResonantLimitsTask(StatInferenceTask):
             # each one carries a different luminosity. plot_params may still override it.
             "campaign": self.get_campaign(era),
         }
-        # get_params() rather than get_param_names(), which drops the insignificant ones
-        # -- that is most of the plot styling (x_min, campaign, ...).
-        known = {
-            param_name for param_name, _ in PlotMultipleResonantLimits.get_params()
-        }
-        for key, value in (entry.get("plot_params") or {}).items():
-            if key not in known:
-                raise RuntimeError(
-                    f"limit_plots entry '{name}': '{key}' is not a "
-                    "PlotMultipleResonantLimits parameter."
-                )
-            params[key] = value
+        plot_params = entry.get("plot_params") or {}
+        self.validate_plot_params(
+            PlotMultipleResonantLimits, plot_params, f"limit_plots entry '{name}'"
+        )
+        params.update(plot_params)
 
         # dhi turns an unset campaign into None and simply draws no luminosity label, so
         # a missing entry would silently produce an unlabelled plot. Refuse instead.
@@ -284,60 +262,6 @@ class PlotResonantLimitsTask(StatInferenceTask):
             json.dump(entry_json, f, indent=2)
             f.write("\n")
         return out_path
-
-    def plot_targets(self, task_cls, spec):
-        """Where the dhi task will write, without scheduling it.
-
-        Constructing the task is safe and is the only honest way to learn its output
-        paths -- they are built from a hash of the datacard sequences plus several
-        parameters, which is not something to reimplement here.
-        """
-        return law.util.flatten(task_cls(**spec).output())
-
-    def plot_command(self, task_cls, spec):
-        """`law run <dhi plot task> ...` for a spec."""
-        cmd = ["law", "run", task_cls.__name__]
-        for key, value in spec.items():
-            flag = "--" + key.replace("_", "-")
-            if isinstance(value, bool):
-                # luigi bool parameters are set by presence, not by value
-                if value:
-                    cmd.append(flag)
-            elif key == "multi_datacards":
-                # colon between datacard sequences, comma within one
-                cmd += [flag, ":".join(",".join(seq) for seq in value)]
-            elif isinstance(value, (tuple, list)):
-                cmd += [flag, ",".join(str(v) for v in value)]
-            else:
-                cmd += [flag, str(value)]
-        if self.redraw:
-            cmd += ["--remove-output", "0,a,y"]
-        return cmd
-
-    def draw_plot(self, task_cls, spec, name, era, dest_dir):
-        """Run a dhi plot task, check it actually drew, copy the result into ``dest_dir``.
-
-        Returns the basenames copied, for the plots.json manifest.
-        """
-        # cwd is pinned to the analysis root: dhi's resolve_datacards() takes a
-        # different branch when the process happens to sit inside a configured
-        # datacards_run2 directory.
-        ps_call(self.plot_command(task_cls, spec), cwd=self.ana_path(), verbose=1)
-
-        basenames = []
-        for target in self.plot_targets(task_cls, spec):
-            # luigi's retcode defaults return 0 even when a task fails, and no
-            # [retcode] section overrides them here -- so a clean exit is not
-            # evidence that anything was drawn. The file is.
-            if not os.path.exists(target.path):
-                raise RuntimeError(
-                    f"limit_plots entry '{name}' ({era}): law exited cleanly "
-                    f"but {target.path} was not written. See the output above "
-                    "for the task that actually failed."
-                )
-            shutil.copy2(target.path, dest_dir)
-            basenames.append(os.path.basename(target.path))
-        return basenames
 
     def run(self):
         entries = self.get_config_data().get("limit_plots", [])

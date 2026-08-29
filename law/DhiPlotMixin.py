@@ -1,0 +1,105 @@
+import law
+import luigi
+import os
+import shutil
+
+from FLAF.RunKit.run_tools import ps_call
+
+
+class DhiPlotMixin:
+    """Running a dhi plot task from one of ours, and keeping what it drew.
+
+    dhi writes its plots under inference/data/store, which is what makes an
+    already-drawn plot cheap to re-request but leaves the products somewhere other than
+    the rest of the chain's. Every task here follows the same three steps: work out where
+    dhi will write, run it as a subprocess, copy the result into our own output.
+
+    The dhi tasks are invoked as subprocesses rather than yielded as dynamic dependencies.
+    luigi round-trips a dynamic dependency through to_str_params() / from_str_params(),
+    and dhi declares parameters whose unset defaults do not survive that -- lumi_scale is
+    a FloatParameter(default=None) that serialises to "None" and then raises on
+    float("None"). Going through the command line keeps dhi unmodified.
+    """
+
+    # Forwarded as "--remove-output 0,a,y": depth 0 drops the plot itself and nothing
+    # below it, so no fit is recomputed. Needed because much of the plot styling is
+    # significant=False and so does not move the output path -- changing it would
+    # otherwise leave the old plot in place and look like the change had no effect.
+    redraw = luigi.BoolParameter(
+        default=False,
+        significant=False,
+        description="discard existing plots and draw them again",
+    )
+
+    @staticmethod
+    def known_plot_params(task_cls):
+        """The parameter names a dhi plot task accepts.
+
+        get_params() rather than get_param_names(), which drops the insignificant ones --
+        that is most of the plot styling (x_min, campaign, parameters_per_page, ...).
+        """
+        return {param_name for param_name, _ in task_cls.get_params()}
+
+    def validate_plot_params(self, task_cls, params, context):
+        """Reject a plot_params key the dhi task would silently ignore."""
+        known = self.known_plot_params(task_cls)
+        for key in params:
+            if key not in known:
+                raise RuntimeError(
+                    f"{context}: '{key}' is not a {task_cls.__name__} parameter."
+                )
+
+    def plot_targets(self, task_cls, spec):
+        """Where the dhi task will write, without scheduling it.
+
+        Constructing the task is safe and is the only honest way to learn its output
+        paths -- they are built from a hash of the datacards plus several parameters,
+        which is not something to reimplement here. flatten() because a dhi task's
+        output() may be a single target, a list, or a dict of both (PlotPullsAndImpacts
+        returns {"plots": [...], "plot_data": ...}).
+        """
+        return law.util.flatten(task_cls(**spec).output())
+
+    def plot_command(self, task_cls, spec):
+        """`law run <dhi plot task> ...` for a spec."""
+        cmd = ["law", "run", task_cls.__name__]
+        for key, value in spec.items():
+            flag = "--" + key.replace("_", "-")
+            if isinstance(value, bool):
+                # luigi bool parameters are set by presence, not by value
+                if value:
+                    cmd.append(flag)
+            elif key == "multi_datacards":
+                # colon between datacard sequences, comma within one
+                cmd += [flag, ":".join(",".join(seq) for seq in value)]
+            elif isinstance(value, (tuple, list)):
+                cmd += [flag, ",".join(str(v) for v in value)]
+            else:
+                cmd += [flag, str(value)]
+        if self.redraw:
+            cmd += ["--remove-output", "0,a,y"]
+        return cmd
+
+    def draw_plot(self, task_cls, spec, name, era, dest_dir):
+        """Run a dhi plot task, check it actually drew, copy the result into ``dest_dir``.
+
+        Returns the basenames copied, for the manifest.
+        """
+        # cwd is pinned to the analysis root: dhi's resolve_datacards() takes a
+        # different branch when the process happens to sit inside a configured
+        # datacards_run2 directory.
+        ps_call(self.plot_command(task_cls, spec), cwd=self.ana_path(), verbose=1)
+
+        basenames = []
+        for target in self.plot_targets(task_cls, spec):
+            # luigi's retcode defaults return 0 even when a task fails, and no
+            # [retcode] section overrides them here -- so a clean exit is not
+            # evidence that anything was drawn. The file is.
+            if not os.path.exists(target.path):
+                raise RuntimeError(
+                    f"'{name}' ({era}): law exited cleanly but {target.path} was not "
+                    "written. See the output above for the task that actually failed."
+                )
+            shutil.copy2(target.path, dest_dir)
+            basenames.append(os.path.basename(target.path))
+        return basenames
