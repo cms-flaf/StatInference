@@ -71,7 +71,10 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
         # The combined cards carry a few hundred autoMCStats bins, so mc_stats puts ~460
         # parameters on the plot. parameters_per_page defaults to -1, meaning a single
         # page, and the result is an unreadable hairline strip rather than an error.
-        if plot_params.get("mc_stats") and plot_params.get("parameters_per_page", -1) < 1:
+        if (
+            plot_params.get("mc_stats")
+            and plot_params.get("parameters_per_page", -1) < 1
+        ):
             raise RuntimeError(
                 f"impact_plots entry '{name}': mc_stats puts every autoMCStats bin on the "
                 "plot, and parameters_per_page defaults to -1 (one page), which is "
@@ -103,7 +106,11 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
         does not carry was dropped.
         """
         merged = MergePullsAndImpacts(
-            **{k: v for k, v in spec.items() if k in self.known_plot_params(MergePullsAndImpacts)}
+            **{
+                k: v
+                for k, v in spec.items()
+                if k in self.known_plot_params(MergePullsAndImpacts)
+            }
         ).output()
         if not os.path.exists(merged.path):
             return
