@@ -199,6 +199,7 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
                             name,
                             f"{era} mass {mass}",
                             dest_dir,
+                            extra_args=entry.get("dhi_args") or (),
                         )
                         self.report_dropped_parameters(entry, era, mass, spec)
                         produced.extend(os.path.join(rel, b) for b in basenames)

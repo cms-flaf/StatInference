@@ -60,8 +60,15 @@ class DhiPlotMixin:
         """
         return law.util.flatten(task_cls(**spec).output())
 
-    def plot_command(self, task_cls, spec):
-        """`law run <dhi plot task> ...` for a spec."""
+    def plot_command(self, task_cls, spec, extra_args=()):
+        """`law run <dhi plot task> ...` for a spec.
+
+        ``extra_args`` is appended verbatim. It exists for the arguments that belong to a
+        task upstream of the one being run rather than to it -- law namespaces those as
+        --<TaskName>-<param>, so they are not parameters of task_cls and cannot go in the
+        spec. Sending the per-parameter fits of PullsAndImpacts to HTCondor is the case
+        that needs it: --PullsAndImpacts-workflow htcondor.
+        """
         cmd = ["law", "run", task_cls.__name__]
         for key, value in spec.items():
             flag = "--" + key.replace("_", "-")
@@ -76,11 +83,12 @@ class DhiPlotMixin:
                 cmd += [flag, ",".join(str(v) for v in value)]
             else:
                 cmd += [flag, str(value)]
+        cmd += [str(a) for a in extra_args]
         if self.redraw:
             cmd += ["--remove-output", "0,a,y"]
         return cmd
 
-    def draw_plot(self, task_cls, spec, name, era, dest_dir):
+    def draw_plot(self, task_cls, spec, name, era, dest_dir, extra_args=()):
         """Run a dhi plot task, check it actually drew, copy the result into ``dest_dir``.
 
         Returns the basenames copied, for the manifest.
@@ -88,7 +96,11 @@ class DhiPlotMixin:
         # cwd is pinned to the analysis root: dhi's resolve_datacards() takes a
         # different branch when the process happens to sit inside a configured
         # datacards_run2 directory.
-        ps_call(self.plot_command(task_cls, spec), cwd=self.ana_path(), verbose=1)
+        ps_call(
+            self.plot_command(task_cls, spec, extra_args),
+            cwd=self.ana_path(),
+            verbose=1,
+        )
 
         basenames = []
         for target in self.plot_targets(task_cls, spec):
