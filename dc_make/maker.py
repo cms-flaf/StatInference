@@ -934,6 +934,32 @@ class DatacardMaker:
         else:
             add(None, "*", proc)
 
+    def warnUnusedUncertainties(self):
+        """Name the configured uncertainties that reached no bin of this card.
+
+        addUncertainty walks the process/era/channel/category product and adds nothing
+        where the uncertainty does not apply, so one that matches nothing at all is not an
+        error anywhere -- it simply never appears, and the card is quietly missing a
+        nuisance. That is worth saying out loud: the usual cause is a `processes:` or
+        `categories:` pattern that matches no name, and the usual reason for that is a
+        pattern written with a placeholder the maker never substitutes (a signal's ${MX}
+        is already resolved to the mass being built by the time it is matched, so it has
+        to be written as a ^-anchored regex).
+
+        Some entries legitimately reach nothing -- an era-scoped nuisance in a card for a
+        different era -- so this warns rather than raises.
+        """
+        used = set(self.cb.syst_name_set())
+        unused = [name for name in self.uncertainties if name not in used]
+        if unused:
+            print(
+                f"WARNING: {len(unused)} configured uncertainty(ies) were added to no bin "
+                f"of this card and are absent from it: {', '.join(sorted(unused))}. "
+                "Check their processes/eras/channels/categories patterns against the "
+                "names actually in the card."
+            )
+        return unused
+
     def addUncertainty(self, unc_name):
         unc = self.uncertainties[unc_name]
         isMVLnUnc = isinstance(unc, MultiValueLnNUncertainty)
@@ -1237,6 +1263,7 @@ class DatacardMaker:
             for unc_name in self.uncertainties.keys():
                 print(f"adding uncertainty: {unc_name}")
                 self.addUncertainty(unc_name)
+            self.warnUnusedUncertainties()
             if self.autoMCStats["apply"]:
                 self.cb.SetAutoMCStats(
                     self.cb,
