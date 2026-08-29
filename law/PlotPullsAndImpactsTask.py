@@ -293,11 +293,17 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
 
                         spec = self.build_plot_spec(entry, era, mass)
                         extra = list(entry.get("dhi_args") or ())
+                        # Everything that has to reach combine itself goes through
+                        # PullsAndImpacts' custom_args, which is a single string, so the
+                        # signal strength and any fit options are joined into one.
+                        custom = []
                         poi = self.poi_value(entry, era, mass)
                         if poi is not None:
+                            custom.append(f"--expectSignal={poi:.4g}")
+                        custom += [str(a) for a in (entry.get("fit_args") or ())]
+                        if custom:
                             extra.append(
-                                "--PullsAndImpacts-custom-args="
-                                f"--expectSignal={poi:.4g}"
+                                "--PullsAndImpacts-custom-args=" + " ".join(custom)
                             )
                         basenames = self.draw_plot(
                             PlotPullsAndImpacts,
