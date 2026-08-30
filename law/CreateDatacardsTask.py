@@ -323,8 +323,13 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                 # grid and undo the whole point of the rebinning.
                 "--var",
                 self.plot_variable(variable),
+                # The plotted shapes are the sum over every sub-era, so the label has to
+                # name the combination: HistPlotter reads config/plot/<year>.yaml for the
+                # luminosity, and a sub-era's file states that sub-era's luminosity alone.
+                # --period stays a real era -- it builds the Setup, which does not know
+                # meta-era names.
                 "--year",
-                self.period,
+                self.datacard_era,
                 "--ana_path",
                 self.ana_path(),
                 "--period",

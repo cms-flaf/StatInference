@@ -292,6 +292,79 @@ class DatacardMaker:
             return unc.value
         return None
 
+    def getMVLnNValue(self, unc, process, era, channel, category, model_params):
+        """A multi-value lnN's value for a process, resolving `subprocesses`.
+
+        The configuration writes a value per *process*, but a merged process -- one
+        declared with `subprocesses` -- has no entry of its own: TotalBkg is TT+DY+ST+VV
+        and the values are written for TT, DY, ST and VV. Without this the lookup returns
+        None and the nuisance vanishes from every merged bin without a word, while plain
+        lnN and shape uncertainties reach the same process perfectly well through
+        Uncertainty.appliesTo, which does look into `subprocesses`. This is the
+        multi-value equivalent of that.
+
+        The merged yield varies by the yield-weighted mean over *all* the constituents,
+        so a subprocess the uncertainty says nothing about contributes its yield at zero
+        variation. That is what the merge is: top_mass moves TT and ST, and the fraction
+        of TotalBkg it can move is the fraction of TotalBkg they are. It is also what the
+        meta-era path already produces, since _getSubEraLnNVariedShapes scales each
+        subprocess's own histogram and sums -- the two paths have to agree about the same
+        configuration entry. (The pre-refactor getMultiValueLnUnc divided by the covered
+        subprocesses' yield instead, which left the uncovered part out of the denominator
+        and so overstated the variation on the merged process.)
+        """
+        direct = unc.getUncertaintyForProcess(process.name, era, channel, category)
+        if direct is not None or not process.subprocesses:
+            return direct
+
+        # Meta-eras sum their sub-eras: the merged shape a meta-era bin carries is that
+        # sum, so the weights have to be taken over the same set of histograms.
+        sub_eras = self.getSubEras(era) if self.isMetaEra(era) else [era]
+        total_yield = 0.0
+        weighted = {UncertaintyScale.Up: 0.0, UncertaintyScale.Down: 0.0}
+        any_value = False
+
+        for sub_era in sub_eras:
+            _, file = self.getInputFile(sub_era, model_params)
+            for subp in process.subprocesses:
+                hist = self._loadBinnedHist(
+                    file,
+                    sub_era,
+                    channel,
+                    category,
+                    model_params,
+                    f"{channel}/{category}/{subp}",
+                )
+                sub_yield = hist.Integral(1, hist.GetNbinsX() + 1)
+                if sub_yield <= 0:
+                    # A subprocess that is absent or has gone negative here carries no
+                    # weight; letting it into the denominator would scale the others down
+                    # by an amount that is not a yield.
+                    continue
+                total_yield += sub_yield
+                value = unc.getUncertaintyForProcess(subp, sub_era, channel, category)
+                if value is None:
+                    continue
+                any_value = True
+                for scale in weighted:
+                    weighted[scale] += self._lnNComponent(value, scale) * sub_yield
+
+        if not any_value or total_yield <= 0:
+            return None
+        return {scale: weighted[scale] / total_yield for scale in weighted}
+
+    @staticmethod
+    def _lnNComponent(unc_value, direction):
+        """One direction of a lnN value, as a signed relative shift.
+
+        A symmetric entry is a single number meaning +v up and -v down -- the convention
+        _applyLnNToHist reads -- so it has to be given its sign before it can be averaged
+        against asymmetric entries, which carry theirs already.
+        """
+        if isinstance(unc_value, dict):
+            return unc_value[direction]
+        return unc_value if direction == UncertaintyScale.Up else -unc_value
+
     def _applyLnNToHist(self, hist, unc_value, direction):
         scaled = hist.Clone()
         if isinstance(unc_value, dict):
@@ -1003,8 +1076,8 @@ class DatacardMaker:
                 continue
 
             if isMVLnUnc:
-                unc_value = unc.getUncertaintyForProcess(
-                    process.name, era, channel, category
+                unc_value = self.getMVLnNValue(
+                    unc, process, era, channel, category, model_params
                 )
 
             uncApplies = (
@@ -1101,8 +1174,8 @@ class DatacardMaker:
                         continue
 
                     if isMVLnUnc:
-                        unc_value = unc.getUncertaintyForProcess(
-                            process.name, era, channel, category
+                        unc_value = self.getMVLnNValue(
+                            unc, process, era, channel, category, params
                         )
                     uncApplies = (
                         (unc_value is not None)
