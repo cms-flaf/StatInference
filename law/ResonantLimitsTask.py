@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 
 from dhi.tasks.resonant import MergeResonantLimits
 
@@ -13,6 +14,9 @@ from .CreateDatacardsTask import CreateDatacardsTask
 
 
 class ResonantLimitsTask(StatInferenceTask):
+    # Not a workflow itself. The parameter exists so that --workflow reaches the tasks
+    # below that are -- law's req() only forwards parameters both tasks declare -- and
+    # NO_STR leaves each of those at its own default.
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
     def store_parts(self):
@@ -79,12 +83,6 @@ class ResonantLimitsTask(StatInferenceTask):
         )
         print(f"Merged limits: {limits}")
 
-        self.output()["limits"].parent.touch()
-        shutil.copy2(limits.path, self.output()["limits"].path)
-
-        out_dc_dir = self.output()["datacards"]
-        out_dc_dir.touch()
-
         masses = set()
         for e, cards in era_cards.items():
             for c in cards:
@@ -92,19 +90,38 @@ class ResonantLimitsTask(StatInferenceTask):
                 if m:
                     masses.add(m.group(1))
 
-        # The cross-era combination is the one place a group era and its members cannot
-        # both appear: the group already *is* their combination, so a card built from both
-        # would count those events twice. Every era still gets its own limit above.
-        for mass in masses:
-            combine_args = []
-            for e in self.get_top_level_eras():
-                for c in era_cards.get(e, []):
-                    if c.endswith(f"_{mass}.txt"):
-                        combine_args.append(f"{e}={c}")
-                        break
+        # Built into a staging directory and published only once every card is there.
+        # Creating the outputs first and filling them as we go left a failed
+        # combineCards halfway through looking like a complete task -- law's default
+        # completeness is output existence -- so the next run skipped it and everything
+        # downstream read a partial set. Replacing the directory rather than writing into
+        # it also clears cards for masses no longer in the configuration.
+        with tempfile.TemporaryDirectory() as staging:
+            # The cross-era combination is the one place a group era and its members
+            # cannot both appear: the group already *is* their combination, so a card
+            # built from both would count those events twice.
+            for mass in sorted(masses):
+                combine_args = []
+                for e in self.get_top_level_eras():
+                    for c in era_cards.get(e, []):
+                        if c.endswith(f"_{mass}.txt"):
+                            combine_args.append(f"{e}={c}")
+                            break
 
-            if combine_args:
-                cmd = ["combineCards.py"] + combine_args
-                out_file = os.path.join(out_dc_dir.path, f"combined_{mass}.txt")
-                with open(out_file, "w") as f:
-                    subprocess.run(cmd, env=self.cmssw_env, stdout=f, check=True)
+                if combine_args:
+                    cmd = ["combineCards.py"] + combine_args
+                    out_file = os.path.join(staging, f"combined_{mass}.txt")
+                    with open(out_file, "w") as f:
+                        subprocess.run(cmd, env=self.cmssw_env, stdout=f, check=True)
+
+            out_dc_dir = self.output()["datacards"]
+            if out_dc_dir.exists():
+                out_dc_dir.remove()
+            out_dc_dir.touch()
+            for name in sorted(os.listdir(staging)):
+                shutil.copy2(
+                    os.path.join(staging, name), os.path.join(out_dc_dir.path, name)
+                )
+
+        self.output()["limits"].parent.touch()
+        shutil.copy2(limits.path, self.output()["limits"].path)

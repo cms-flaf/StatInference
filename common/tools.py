@@ -84,17 +84,6 @@ class CategoryNaming:
     def name(self, base_category, slice_idx):
         return self.pattern.format(base_category=base_category, slice_idx=slice_idx)
 
-    def expand(self, base_categories, n_slices):
-        """Base category names -> the per-slice names that exist in the rebinned files.
-
-        Every consumer of the datacard configuration's ``categories`` list needs the same
-        expansion, and bin_opt_2d/rebin_2d.py writes with the same pattern, so it is
-        done in one place.
-        """
-        return [
-            self.name(base, idx) for base in base_categories for idx in range(n_slices)
-        ]
-
     def split(self, category):
         """Inverse of name(): "SR/res2b_dnn2" -> ("SR/res2b", 2).
 

@@ -38,6 +38,9 @@ class PlotResonantLimitsTask(DhiPlotMixin, StatInferenceTask):
     products; see DhiPlotMixin for how a dhi plot task is run and its output collected.
     """
 
+    # Not a workflow itself. The parameter exists so that --workflow reaches the tasks
+    # below that are -- law's req() only forwards parameters both tasks declare -- and
+    # NO_STR leaves each of those at its own default.
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
     def requires(self):
@@ -269,6 +272,19 @@ class PlotResonantLimitsTask(DhiPlotMixin, StatInferenceTask):
             raise RuntimeError(
                 f"{self.datacard_config_path()} declares no 'limit_plots' block, so there "
                 "is nothing to plot."
+            )
+
+        # Every entry of an era writes into that era's one directory, and the plot file
+        # is named after the entry, so two entries sharing a name silently overwrite each
+        # other's plots and only the last one survives. Said here rather than left to be
+        # noticed in a missing plot.
+        names = [entry.get("name") or "limits" for entry in entries]
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        if duplicates:
+            raise RuntimeError(
+                f"{self.datacard_config_path()}: limit_plots entries must have distinct "
+                f"names, since the plot file is named after the entry; repeated: "
+                f"{', '.join(duplicates)}. An entry with no 'name' is called 'limits'."
             )
 
         with self.output().localize("w") as local_output:

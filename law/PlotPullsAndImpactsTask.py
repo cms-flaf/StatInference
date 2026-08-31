@@ -35,6 +35,9 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
     nuisances costs ~150 fits for a single mass.
     """
 
+    # Not a workflow itself. The parameter exists so that --workflow reaches the tasks
+    # below that are -- law's req() only forwards parameters both tasks declare -- and
+    # NO_STR leaves each of those at its own default.
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
     def requires(self):
@@ -175,8 +178,17 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
         Note this cannot go through dhi's `parameter_values`: for a resonant search
         hh_model is NO_STR, and POITask then hard-codes both the joined parameter values
         ('""') and the output postfix (r=1.0), so the value would be silently dropped. It
-        has to reach combine as --expectSignal through PullsAndImpacts' custom_args, which
-        is significant and so does change the fit's output path.
+        has to reach combine as --expectSignal through PullsAndImpacts' custom_args.
+
+        WARNING: custom_args is *not* part of any dhi output path. It is a significant
+        luigi parameter, so it changes the task id, but dhi builds its file names from
+        store_parts() and get_output_postfix() alone -- neither of which reads it, and its
+        own parameter description says as much ("they might not be encoded into output
+        file paths"). So changing poi_value or fit_args and re-running under the same
+        version silently reuses the previous fits, and --redraw then redraws from those.
+        Until that is fixed (by deriving the dhi version from a hash of the custom args),
+        a changed fit setting needs a new --version or a hand-cleared
+        inference/data/store.
         """
         value = entry.get("poi_value")
         if value is None:

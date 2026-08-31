@@ -16,6 +16,9 @@ class ResonantLimitsAndHistPlotTask(StatInferenceTask):
     declares in `limit_plots` are asked for separately, by running PlotResonantLimitsTask.
     """
 
+    # Not a workflow itself. The parameter exists so that --workflow reaches the tasks
+    # below that are -- law's req() only forwards parameters both tasks declare -- and
+    # NO_STR leaves each of those at its own default.
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
     def get_plottable_eras(self):

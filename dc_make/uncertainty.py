@@ -296,6 +296,12 @@ class MultiValueLnNUncertainty(Uncertainty):
     def getUncertaintyForProcess(self, process, era=None, channel=None, category=None):
         for key in self.values.keys():
             processes, eras, channels, categories = key
+            # Every field here is a scope, `processes` included: empty means
+            # unrestricted. That is load-bearing -- lumi_1_13p6TeV in the bbWW DL config
+            # is scoped by era alone, because a luminosity uncertainty applies to every
+            # simulated process and listing them would be a list to keep in sync. The
+            # cost is that an entry which *meant* to name a process and forgot silently
+            # applies to all of them, so an entry that is about one process must say so.
             if processes and process not in processes:
                 continue
             if era is not None and eras and era not in eras:

@@ -7,12 +7,12 @@ from FLAF.RunKit.run_tools import ps_call
 
 
 class DhiPlotMixin:
-    """Running a dhi plot task from one of ours, and keeping what it drew.
+    """Running a dhi plot task from a StatInference task, and keeping what it drew.
 
     dhi writes its plots under inference/data/store, which is what makes an
     already-drawn plot cheap to re-request but leaves the products somewhere other than
     the rest of the chain's. Every task here follows the same three steps: work out where
-    dhi will write, run it as a subprocess, copy the result into our own output.
+    dhi will write, run it as a subprocess, copy the result into the task's own output.
 
     The dhi tasks are invoked as subprocesses rather than yielded as dynamic dependencies.
     luigi round-trips a dynamic dependency through to_str_params() / from_str_params(),

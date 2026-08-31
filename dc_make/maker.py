@@ -71,6 +71,22 @@ class DatacardMaker:
         self.signalFractionForRelevantBins = cfg["signalFractionForRelevantBins"]
 
         self.era_groups = cfg.get("era_groups", {})
+        # A card built from a group era and its members at once counts those events
+        # twice: the group already is their combination. The law chain never does this --
+        # it builds one era per invocation -- but create_datacards.py run by hand on a
+        # configuration whose `eras:` lists both would, silently and with every yield
+        # looking plausible.
+        for group, members in self.era_groups.items():
+            if group not in self.eras:
+                continue
+            overlap = [m for m in members if m in self.eras]
+            if overlap:
+                raise RuntimeError(
+                    f"eras: lists the group era '{group}' together with its own "
+                    f"member(s) {', '.join(overlap)}. One datacard cannot hold both -- "
+                    f"'{group}' already is their combination, so the events would be "
+                    "counted twice. List the group or the members, not both."
+                )
 
         self.bins = []
         for era, channel, cat in self.ECC():
@@ -162,8 +178,8 @@ class DatacardMaker:
         """Process names absorbed by an active merged process in this bin.
 
         A process declared with `subprocesses` that name other *datacard* processes
-        replaces them wherever it applies -- see MinorBkg in the bbWW DL config,
-        which merges DY/ST/VV in the boosted slices where DY alone has no usable MC
+        replaces them wherever it applies -- see TotalBkg in the bbWW DL config,
+        which merges TT/DY/ST/VV in the boosted slices where DY alone has no usable MC
         statistics. Suppressing the constituents here is what stops the merge from
         double counting, and it means they keep their own configuration unchanged
         instead of needing a mirror-image category list to carve the merged bins
@@ -479,10 +495,31 @@ class DatacardMaker:
 
         if not any_applies:
             return None
-        return nominal_shape, {
+
+        # The same validation the nominal already went through in getShape. Without it
+        # the two disagree wherever a bin was clamped: resolveNegativeBins rebalances in
+        # place, so a nominal bin sitting at zero after clamping would face an Up and a
+        # Down template still carrying the raw negative content -- and the ratio to the
+        # nominal is what the fit reads. Each variation is checked as its own shape, on
+        # the same sub-era set the nominal was summed over.
+        sub_eras = self.getSubEras(era)
+        variations = {
             UncertaintyScale.Up: combined_up,
             UncertaintyScale.Down: combined_down,
         }
+        for unc_scale, hist in variations.items():
+            self.resolveOrRaiseNegativeBins(
+                hist,
+                process,
+                era,
+                channel,
+                category,
+                model_params,
+                unc.name,
+                unc_scale,
+                discovery_eras=sub_eras,
+            )
+        return nominal_shape, variations
 
     def _canIgnoreLnNShape(self, nominal_shape, shapes):
         nom_int = nominal_shape.Integral()
@@ -577,7 +614,10 @@ class DatacardMaker:
                     else:
                         combined_hist.Add(bkg_hist)
             if combined_hist is None:
-                raise RuntimeError("Cannot create asimov data histogram")
+                raise RuntimeError(
+                    "Cannot create asimov data histogram for "
+                    f"{era}/{channel}/{category}: no background process enters this bin."
+                )
             return combined_hist
 
         # Meta-era: combine histograms from all sub-eras. Negative-bin
@@ -682,7 +722,11 @@ class DatacardMaker:
                         else:
                             hist.Add(bkg_hist)
                 if hist is None:
-                    raise RuntimeError("Cannot create asimov data histogram")
+                    raise RuntimeError(
+                        "Cannot create asimov data histogram for "
+                        f"{era}/{channel}/{category}: no background process enters "
+                        "this bin."
+                    )
             else:
                 hist_name = f"{channel}/{category}/{process.hist_name}"
                 hists = []
@@ -895,17 +939,31 @@ class DatacardMaker:
                 + (f" (syst {unc_name}{unc_scale})" if unc_name and unc_scale else "")
             )
 
-    def getSignalProcessForParams(self, model_params):
-        """Signal Process matching model_params, or None. Used to gate a
-        param-dependent background on whether the signal hypothesis it's
-        being evaluated for actually has a shape in a given era/channel/
-        category -- backgrounds are looked up per-MX (param_dependent_bkg),
-        so a category the rebinning skipped for that MX has no background
-        histograms either, not just no signal."""
-        for p in self.processes.values():
-            if p.is_signal and p.params == model_params:
-                return p
-        return None
+    def anySignalHasShape(self, model_params, era, channel, category):
+        """Whether *any* signal at this parameter point has a shape in this bin.
+
+        Gates a param-dependent background on the signal hypothesis it is being
+        evaluated for: backgrounds are looked up per-MX (param_dependent_bkg), so a
+        category the rebinning skipped for that MX has no background histograms either,
+        not just no signal.
+
+        any(), not the first match, because addProcess adds the background copy once per
+        parameter point if any signal carrying that point has a shape. Several signal
+        processes can share the same mass grid -- the bbWW and bbtautau decay modes of the
+        same resonance do -- and asking only the first of them left a bin where only the
+        second exists with its backgrounds present but stripped of every systematic.
+        """
+        candidates = [
+            p
+            for p in self.processes.values()
+            if p.is_signal and p.params == model_params
+        ]
+        if not candidates:
+            # Nothing to gate on. Kept permissive, as before: a parameter point with no
+            # signal process at all is a configuration question, not a reason to strip a
+            # background of its uncertainties here.
+            return True
+        return any(self.hasNominalShape(p, era, channel, category) for p in candidates)
 
     def hasNominalShape(self, process, era, channel, category):
         """Whether process's nominal shape exists for (era, channel, category),
@@ -1052,10 +1110,7 @@ class DatacardMaker:
                 if not self.hasNominalShape(process, era, channel, category):
                     continue
             elif self.model.param_dependent_bkg and model_params is not None:
-                signal_proc = self.getSignalProcessForParams(model_params)
-                if signal_proc is not None and not self.hasNominalShape(
-                    signal_proc, era, channel, category
-                ):
+                if not self.anySignalHasShape(model_params, era, channel, category):
                     continue
 
             if (
@@ -1151,6 +1206,10 @@ class DatacardMaker:
                 for era, channel, category in self.ECC():
                     base_name = self.base_of.get(proc_name, proc_name)
                     process = self.processes[base_name]
+                    # As in the primary loop: a process merged away in this bin is not in
+                    # the card there, so it must not collect uncertainties there either.
+                    if not self.processInBin(base_name, channel, category):
+                        continue
                     if process.is_data:
                         continue
                     if not process.hasCompatibleModelParams(
@@ -1158,8 +1217,16 @@ class DatacardMaker:
                     ):
                         continue
 
-                    if self.isMetaEra(era) and isinstance(
-                        unc, (LnNUncertainty, MultiValueLnNUncertainty)
+                    # Same three conditions as the primary loop above: only an
+                    # era-dependent lnN has to become a shape for a meta-era, since that
+                    # is the only kind whose effect differs between the sub-eras being
+                    # summed. Without lnNIsEraDependent this branch converted every lnN,
+                    # correlated ones included, into a template pair saying the same thing
+                    # the lnN already said.
+                    if (
+                        self.isMetaEra(era)
+                        and isinstance(unc, (LnNUncertainty, MultiValueLnNUncertainty))
+                        and self.lnNIsEraDependent(unc)
                     ):
                         self._addMetaEraLnNAsShapeUnc(
                             unc_name,

@@ -29,7 +29,12 @@ BINNING_JSON = "binning.json"
 # not say otherwise. They belong to an analysis rather than to this file -- what a slice
 # needs to be worth keeping depends on the sample sizes and the selection, and a test
 # configuration wants them at zero -- so every production should state its own in a
-# binning yaml. See bin_opt_2d/binning.yaml for the annotated HH->bbWW set.
+# binning yaml -- see config/Datacards/binning_2d.yaml in HH_bbWW for an annotated
+# set. This file ships no configuration of its own, only these fallbacks.
+# The figures of merit significance() implements. Named here so the yaml path can be
+# checked against the same list the command line's choices= uses.
+SIGNIFICANCE_MODES = ("sb", "asimov")
+
 BINNING_DEFAULTS = {
     "n_slices": 4,
     "category_pattern": None,  # None -> CategoryNaming's own neutral default
@@ -69,6 +74,14 @@ def load_binning_config(path, overrides=None):
     for key, value in (overrides or {}).items():
         if value is not None:
             knobs[key] = value
+    # The command line has choices= for this; the yaml had nothing, and significance()
+    # treats anything it does not recognise as "sb" -- so a typo silently changed the
+    # figure of merit every boundary is chosen by.
+    if knobs["significance_mode"] not in SIGNIFICANCE_MODES:
+        raise RuntimeError(
+            f"{path or 'binning configuration'}: significance_mode "
+            f"'{knobs['significance_mode']}' is not one of {sorted(SIGNIFICANCE_MODES)}."
+        )
     return knobs
 
 
@@ -134,6 +147,10 @@ def load_config(config_path):
         "channels": channels,
         "categories": categories,
         "era_groups": cfg.get("era_groups", {}),
+        # Declared by a configuration that reads sliced shapes, so that run() can check
+        # it against the pattern the shapes are actually written with. None when the
+        # configuration names no pattern, and then there is nothing to check.
+        "category_pattern": cfg.get("category_pattern"),
         "signal_hist_name_patterns": signal_hist_names,
         "signal_param_name": extractParameters(signal_hist_names[0])[0],
         "mass_values": mass_values,
@@ -713,10 +730,10 @@ def mkdir_titled(directory, path, title):
     """mkdir a nested path, putting `title` on the leaf directory only.
 
     TDirectory.mkdir() given a slashed path applies the title to the *first* level and
-    hands the rest of the path down as the sub-levels' titles, so every parent ends up
-    labelled with a stale fragment of whichever slice was created first -- the output
-    currently has "muMu" titled "muMu/SR/res2b_dnn0". Walking the components keeps the
-    parents clean and puts the label where it belongs.
+    hands the rest of the path down as the sub-levels' titles, so every parent would end
+    up labelled with a stale fragment of whichever slice was created first ("muMu" titled
+    "muMu/SR/res2b_dnn0"). Walking the components keeps the parents clean and puts the
+    label where it belongs.
     """
     parts = path.split("/")
     for part in parts[:-1]:
@@ -866,9 +883,12 @@ def process_category(
     optimisation happens at all; the discovery files are then only read for the axes.
     """
     min_signal = knobs["min_signal"]
+    # The resonance parameter is named by the configuration, not by this script -- it is
+    # "MX" for bbWW but the slicing knows nothing about which parameter it is scanning.
+    param_name = cfg["signal_param_name"]
     prefix = f"{channel}/{category}/"
     # The key list comes from the first source era; a systematic that only some eras carry
-    # is filled in from their nominal by sum_over_sources().
+    # is filled in from their nominal when the slices are written below.
     cat_dir = sources[0][1].Get(f"{channel}/{category}")
     if not cat_dir:
         print(f"  [skip] {channel}/{category}: not found in {sources[0][1].GetName()}")
@@ -903,10 +923,12 @@ def process_category(
             reason = "no background histograms found in all discovery eras"
         else:
             reason = f"signal too small for discovery ({sig_integral} < {min_signal})"
-        print(f"    [skip] {channel}/{category} MX={mass}: {reason}, skipping")
+        print(
+            f"    [skip] {channel}/{category} {param_name}={mass}: {reason}, skipping"
+        )
         return
 
-    where = f"{era}/MX={mass}/{channel}/{category}"
+    where = f"{era}/{param_name}={mass}/{channel}/{category}"
     if frozen is not None:
         slices = record_to_slices(
             frozen, disc_sig.GetXaxis(), disc_sig.GetYaxis(), where
@@ -981,11 +1003,31 @@ def run(
     own shape, which a pre-summed shape no longer has.
     """
     cfg = load_config(config_path)
-    # The pattern that names the sliced categories comes from the binning configuration
-    # alongside the edges themselves: it is the writer's choice, and every reader of these
-    # shapes recovers the base category from the same pattern in the datacard config.
-    cfg["naming"] = CategoryNaming(knobs["category_pattern"])
-    cfg["slice_var"] = knobs["slice_var"]
+    # A replay is bound by the record, not by the current knobs. The pattern the shapes
+    # were written with and the axis they were sliced on are properties of that binning,
+    # and binning.json stores both precisely so a replay does not depend on being handed
+    # the same --binning-config again. Taking them from the knobs meant a standalone
+    # replay without it silently wrote its categories under different names.
+    pattern = knobs["category_pattern"]
+    slice_var = knobs["slice_var"]
+    if frozen_binning is not None:
+        pattern = frozen_binning.get("category_pattern", pattern)
+        slice_var = frozen_binning.get("slice_var", slice_var)
+    cfg["naming"] = CategoryNaming(pattern)
+    cfg["slice_var"] = slice_var
+
+    # Both configurations name the pattern, and both carry a comment saying they must
+    # agree -- so check it rather than trust it. A mismatch does not raise on its own:
+    # base() simply fails to take the datacard config's names apart, every slice becomes
+    # its own base category, and the shapes come out under names the datacard step will
+    # not find.
+    config_pattern = cfg.get("category_pattern")
+    if config_pattern is not None and config_pattern != cfg["naming"].pattern:
+        raise RuntimeError(
+            f"category_pattern mismatch: the datacard configuration {config_path} says "
+            f"'{config_pattern}', this binning says '{cfg['naming'].pattern}'. They name "
+            "the same categories from the two ends and have to be identical."
+        )
     # The datacard configuration lists the sliced names this script *writes*
     # ("SR/res2b_dnn0"); the 2D input it *reads* is keyed by the base categories those
     # slices are cut from ("SR/res2b"). Recover them with the same pattern that names
@@ -1032,7 +1074,8 @@ def run(
         discovery_files = [f for _, f, _ in sources]
 
         print(
-            f"Rebinning {era} MX={mass} from {len(sources)} source era(s) -> "
+            f"Rebinning {era} {cfg['signal_param_name']}={mass} from "
+            f"{len(sources)} source era(s) -> "
             f"{os.path.join(output_dir, era)}"
         )
         by_channel = by_mass.setdefault(str(mass), {})
@@ -1062,6 +1105,16 @@ def run(
     # Written beside the shapes it describes, in the same output as them: the binning is
     # a product of this run, not configuration, so it travels with what it produced and a
     # reader never has to work out which binning a set of shapes came from.
+    if not any(
+        by_ch for by_mass_ in record["binning"].values() for by_ch in by_mass_.values()
+    ):
+        raise RuntimeError(
+            f"{era}: every channel/category was skipped, so no shapes were written and "
+            "the binning record is empty. The [skip] lines above say why -- usually the "
+            "signal is below min_signal, or a background is missing from a discovery "
+            "era. Exiting 0 here would hand the datacard step an empty input."
+        )
+
     os.makedirs(output_dir, exist_ok=True)
     json_path = os.path.join(output_dir, BINNING_JSON)
     with open(json_path, "w") as f:
@@ -1192,7 +1245,7 @@ if __name__ == "__main__":
         required=False,
         type=str,
         default=None,
-        choices=["sb", "asimov"],
+        choices=list(SIGNIFICANCE_MODES),
         help="figure of merit for slice boundaries: 'sb' = S/sqrt(B+sigmaB^2), "
         "'asimov' = Poisson-correct Asimov significance (valid at low B)",
     )

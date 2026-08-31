@@ -52,7 +52,12 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
         }
 
     def workflow_requires(self):
-        return self.input_hist_reqs()
+        # Merged with the base class's rather than replacing them: FLAF's HTCondorWorkflow
+        # puts the software bundles a submitted job unpacks in there, and returning only
+        # our own inputs drops them, so the jobs start without the bundle they need.
+        reqs = super().workflow_requires()
+        reqs.update(self.input_hist_reqs())
+        return reqs
 
     def requires(self):
         return list(self.input_hist_reqs().values())
@@ -96,8 +101,9 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
                 self.datacard_config_path(),
             ]
             # ${ERA} in an argument names the era being produced, the same way the model's
-            # input_file_pattern does. Relative paths are resolved against the analysis
-            # area so a configuration can point at its own files without absolute paths.
+            # input_file_pattern does. An argument beginning with "config/" is resolved
+            # against the analysis area, so a configuration can point at its own files
+            # without absolute paths; every other argument is passed through untouched.
             for arg in cfg.get("args", []):
                 arg = Template(str(arg)).safe_substitute(ERA=self.datacard_era)
                 if arg.startswith("config/"):

@@ -15,6 +15,16 @@ from .StatInferenceTask import StatInferenceTask
 
 
 class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow):
+    """The datacards for one era, from the shapes the chain was pointed at.
+
+    Runs dc_make/create_datacards.py on whatever `<era>/<variable>/<variable>.root` tree
+    it is given -- the configuration's `preprocess:` step if it declares one, otherwise
+    the merged histograms directly -- and does no binning of its own. For a meta-era
+    (`meta_era` set, `period` one of its real sub-eras) it holds every sub-era's
+    histograms at once, which is what the summed shape behind each datacard bin is built
+    from, and why the stacked shape plots are drawn here.
+    """
+
     max_runtime = copy_param(HTCondorWorkflow.max_runtime, 2.0)
     n_cpus = copy_param(HTCondorWorkflow.n_cpus, 1)
 
@@ -59,7 +69,12 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         }
 
     def workflow_requires(self):
-        return self.input_hist_reqs()
+        # Merged with the base class's rather than replacing them: FLAF's HTCondorWorkflow
+        # puts the software bundles a submitted job unpacks in there, and returning only
+        # our own inputs drops them, so the jobs start without the bundle they need.
+        reqs = super().workflow_requires()
+        reqs.update(self.input_hist_reqs())
+        return reqs
 
     def requires(self):
         return list(self.input_hist_reqs().values())
