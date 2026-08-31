@@ -476,9 +476,18 @@ def find_slices(
     right = last_bin
     for slice_idx in range(n_slices):
         if slice_idx == n_slices - 1 or right <= first_bin:
-            lo = first_bin if right >= first_bin else right
-            slices.append((lo, right if right >= lo else lo))
-            right = lo - 1
+            if right < first_bin:
+                # The axis ran out before n_slices boundaries were placed. Reported as
+                # None rather than invented: the previous code emitted (0,0), (-1,-1),
+                # (-2,-2) here to keep the count, and ROOT reads any range whose upper
+                # bound is below its lower one as the *whole axis including overflow* --
+                # so those became copies of the full plane, and the same events entered
+                # the fit two or three times as independent categories. discover_binning
+                # rejects the category instead.
+                slices.append(None)
+                continue
+            slices.append((first_bin, right))
+            right = first_bin - 1
             continue
         left = grow_slice(
             sig_hist,
@@ -617,8 +626,15 @@ def find_bins(
 
 def extend_outer_edges(ranges, full_lo, full_hi):
     """Widen the first/last range to swallow under/overflow (bin 0 / nbins+1),
-    so no events are silently dropped at the extremes of the axis."""
+    so no events are silently dropped at the extremes of the axis.
+
+    Only real ranges are widened. Widening a None (an exhausted slice) would invent one,
+    and widening past a None would put the underflow on a range that is not the outermost
+    -- so a list containing any None is left alone and rejected by the caller.
+    """
     ranges = list(ranges)
+    if any(r is None for r in ranges):
+        return ranges
     ranges[0] = (full_lo, ranges[0][1])
     ranges[-1] = (ranges[-1][0], full_hi)
     return ranges
@@ -679,6 +695,14 @@ def discover_binning(
         min_slice_bkg_each_neff,
         min_bkg_frac,
     )
+    if any(sl is None for sl in slices):
+        # The axis could not carry n_slices boundaries: the significance scan reached
+        # first_bin with slices still to place, usually because no window anywhere clears
+        # the background floors. There is no honest binning to return -- an exhausted
+        # slice is neither a selection nor an empty one, since every mass point has to
+        # share the same category list -- so the category is refused here and skipped by
+        # the caller, the same way one with too little signal is.
+        return None
     slices = extend_outer_edges(slices, 0, nx + 1)
 
     result = []
@@ -838,6 +862,15 @@ def rebin_hist_2d(hist2d, slices, name, naming):
     outputs = []
     for slice_idx, sl in enumerate(slices):
         xlo, xhi = sl["x_range"]
+        # ROOT reinterprets an inverted or negative range as the full axis including
+        # under/overflow, silently and with a plausible-looking positive yield, so an
+        # invalid range must never reach IntegralAndError below. Checked here rather
+        # than trusted because this is the last point where it is still cheap to say so.
+        if not 0 <= xlo <= xhi:
+            raise RuntimeError(
+                f"invalid x bin range ({xlo}, {xhi}) for slice {slice_idx} of {name}; "
+                "ROOT would read this as the whole plane."
+            )
         edges = array.array("d", bin_edges(hist2d.GetYaxis(), sl["y_ranges"]))
         # Detached for the same reason as the projections above: Write() targets
         # gDirectory regardless, so nothing needs these to stay attached.
@@ -949,6 +982,15 @@ def process_category(
             knobs["min_slice_bkg_each"],
             knobs["min_slice_bkg_each_neff"],
         )
+        if slices is None:
+            print(
+                f"    [skip] {channel}/{category} {param_name}={mass}: the "
+                f"{knobs['n_slices']} slices could not be placed -- the axis was "
+                "exhausted before the last boundary, so no window clears the background "
+                "floors. Lower n_slices or the floors for this configuration."
+            )
+            return
+
     # The selection each slice stands for is otherwise nowhere in the output: the sliced
     # categories are named by index and the surviving axis is the rebinned one. It is the
     # slice directory's own title, so it travels with the histograms and there is no
