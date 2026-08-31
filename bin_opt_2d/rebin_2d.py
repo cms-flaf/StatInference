@@ -901,6 +901,7 @@ def process_category(
     discovery_files,
     knobs,
     frozen=None,
+    replaying=False,
 ):
     """Rebin one channel/category, returning the binning it used (None if skipped).
 
@@ -912,8 +913,10 @@ def process_category(
 
     `sources` is [(source_era, in_file, out_file)]; for a plain era there is one.
 
-    With `frozen` given the edges are replayed from a previous run's binning.json and no
-    optimisation happens at all; the discovery files are then only read for the axes.
+    With `replaying` set the edges come from a previous run's binning.json and no
+    optimisation happens at all: the discovery files are then only read for the axes,
+    the content gates are not applied, and `frozen` being None means the record does not
+    hold this category -- which is a skip, not a licence to derive one.
     """
     min_signal = knobs["min_signal"]
     # The resonance parameter is named by the configuration, not by this script -- it is
@@ -951,7 +954,26 @@ def process_category(
             disc_bkg_by_name[bkg_key] = per_era
 
     sig_integral = disc_sig.Integral() if disc_sig is not None else 0
-    if disc_sig is None or sig_integral < min_signal or not disc_bkg_by_name:
+    if replaying:
+        # A replay reproduces a recorded category set exactly, or it is not a replay.
+        # The gates below decide which categories get binned; re-running them against a
+        # new input can only disagree with the record -- a category whose signal has
+        # since dipped under min_signal would be dropped even though its edges are
+        # written down, which is precisely the drift freezing exists to prevent.
+        if frozen is None:
+            print(
+                f"    [skip] {channel}/{category} {param_name}={mass}: not in the "
+                "binning record, so it was skipped by the run that wrote it; skipped "
+                "again rather than optimised afresh."
+            )
+            return
+        if disc_sig is None:
+            raise RuntimeError(
+                f"{era}/{param_name}={mass}/{channel}/{category} is in the binning "
+                "record, but its signal histogram is missing from the input, so the "
+                "axes the recorded bin indices refer to cannot be read."
+            )
+    elif disc_sig is None or sig_integral < min_signal or not disc_bkg_by_name:
         if not disc_bkg_by_name:
             reason = "no background histograms found in all discovery eras"
         else:
@@ -1136,6 +1158,7 @@ def run(
                     discovery_files,
                     knobs,
                     frozen=frozen,
+                    replaying=frozen_binning is not None,
                 )
                 if used is not None:
                     by_channel.setdefault(channel, {})[category] = used

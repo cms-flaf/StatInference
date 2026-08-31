@@ -38,11 +38,6 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
     # merged shape (and hence each datacard bin) is built from.
     make_plots = luigi.BoolParameter(default=True)
 
-    @property
-    def datacard_era(self):
-        """The era datacards are actually built for: self.meta_era if set, else self.period."""
-        return self.meta_era or self.period
-
     def get_sub_periods(self):
         """Real periods whose histograms feed into datacard_era: its constituent
         sub-eras for a meta-era, otherwise just [self.period]."""

@@ -13,6 +13,11 @@ from .StatInferenceTask import StatInferenceTask
 from .CreateDatacardsTask import CreateDatacardsTask
 
 
+# Key for the cross-era merge in run()'s dynamic-dependency dict. Not an era name,
+# and deliberately not one a configuration could declare.
+COMBINED_KEY = "__combined__"
+
+
 class ResonantLimitsTask(StatInferenceTask):
     # Not a workflow itself. The parameter exists so that --workflow reaches the tasks
     # below that are -- law's req() only forwards parameters both tasks declare -- and
@@ -39,7 +44,13 @@ class ResonantLimitsTask(StatInferenceTask):
 
     def output(self):
         return {
+            # The limit of the combination this configuration is about: the single
+            # top-level era's own, or the cross-era combined cards' when it lists
+            # several. See run() on why this is not one merge over every listed era.
             "limits": self.local_target("limits.npz"),
+            # One limits_<era>.npz per era in `eras:`, which is what get_all_eras()
+            # promises -- each era its own datacards and its own limit.
+            "era_limits": law.LocalDirectoryTarget(self.local_path("era_limits")),
             "datacards": law.LocalDirectoryTarget(self.datacards_dir("combined")),
         }
 
@@ -67,21 +78,13 @@ class ResonantLimitsTask(StatInferenceTask):
         return local_dir
 
     def run(self):
-        datacards = []
         eras = self.get_eras()
         era_cards = {}
 
         for e in eras:
             create_dc_br0 = self._create_datacards_req(e, branch=0, branches=())
             output_dir = self.stage_datacards(e, create_dc_br0.output())
-            cards = glob.glob(os.path.join(output_dir, "*.txt"))
-            era_cards[e] = cards
-            datacards.extend(cards)
-
-        limits = yield MergeResonantLimits(
-            version=self.version, datacards=tuple(datacards)
-        )
-        print(f"Merged limits: {limits}")
+            era_cards[e] = glob.glob(os.path.join(output_dir, "*.txt"))
 
         masses = set()
         for e, cards in era_cards.items():
@@ -118,10 +121,49 @@ class ResonantLimitsTask(StatInferenceTask):
             if out_dc_dir.exists():
                 out_dc_dir.remove()
             out_dc_dir.touch()
+            combined_cards = []
             for name in sorted(os.listdir(staging)):
+                dest = os.path.join(out_dc_dir.path, name)
+                shutil.copy2(os.path.join(staging, name), dest)
+                combined_cards.append(dest)
+
+        # One merge per era, never one merge over every era's cards together. dhi groups
+        # the datacards it is given by the mass in their file name alone and runs
+        # combineCards over each group, so a single merge handed five eras' cards fits
+        # all five into one workspace per mass. With a configuration listing a group era
+        # *and* its members -- x_hh_bbww_DL_run3_1D.yaml does -- that counted every
+        # 2022-2023BPix event twice, and the result was one over-strong limit per mass
+        # rather than the per-era limits get_all_eras() describes.
+        merges = {
+            e: MergeResonantLimits(version=self.version, datacards=tuple(cards))
+            for e, cards in era_cards.items()
+            if cards
+        }
+        top_level = self.get_top_level_eras()
+        # The cross-era combination is only a separate fit when there is more than one
+        # era to combine; with a single top-level era that era's own merge already is it.
+        combining = len(top_level) > 1 and combined_cards
+        if combining:
+            merges[COMBINED_KEY] = MergeResonantLimits(
+                version=self.version, datacards=tuple(sorted(combined_cards))
+            )
+        merged = yield merges
+
+        era_dir = self.output()["era_limits"]
+        if era_dir.exists():
+            era_dir.remove()
+        era_dir.touch()
+        for e in era_cards:
+            if e in merged:
                 shutil.copy2(
-                    os.path.join(staging, name), os.path.join(out_dc_dir.path, name)
+                    merged[e].path, os.path.join(era_dir.path, f"limits_{e}.npz")
                 )
 
+        headline = merged[COMBINED_KEY] if combining else merged.get(top_level[0])
+        if headline is None:
+            raise RuntimeError(
+                "No datacards were found for any top-level era "
+                f"({', '.join(top_level)}), so there is no combined limit to write."
+            )
         self.output()["limits"].parent.touch()
-        shutil.copy2(limits.path, self.output()["limits"].path)
+        shutil.copy2(headline.path, self.output()["limits"].path)

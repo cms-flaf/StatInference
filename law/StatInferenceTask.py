@@ -62,8 +62,30 @@ class StatInferenceTask(Task):
                 self._config_data = yaml.safe_load(f)
         return self._config_data
 
+    @property
+    def datacard_era(self):
+        """The era this task's products belong to: its meta-era if it has one, else
+        `period`. Equal to `period` for every task that does not declare `meta_era`.
+        """
+        return getattr(self, "meta_era", "") or self.period
+
     def store_parts(self):
-        return (self.version, self.__class__.__name__, self.period)
+        """Keyed on datacard_era, not period.
+
+        A meta-era instance is constructed with `period` set to one of its own sub-eras
+        -- FLAF's Setup only knows real periods -- so keying on `period` gave
+        CreateDatacardsTask(period=Run3_2022) and
+        CreateDatacardsTask(period=Run3_2022, meta_era=Run3_Early) the same store path.
+        The declared outputs never collided (they key on datacard_era already), but
+        law's HTCondor control files live here: htcondor_output_directory() is
+        local_path(), and the submission file is named only after the branches, which
+        for both is {0: None}. A run needing both -- any configuration listing a group
+        era and its members -- had the second workflow resume from the first's
+        submission data, poll jobs that were not its own, and finish incomplete.
+
+        Identical to the old value for every task without a meta_era.
+        """
+        return (self.version, self.__class__.__name__, self.datacard_era)
 
     def datacards_dir(self, era):
         """Local directory holding an era's datacards.

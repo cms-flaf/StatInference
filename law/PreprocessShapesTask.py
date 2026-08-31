@@ -36,10 +36,6 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
     # self.period must stay a real era because FLAF's Setup resolves it against config/.
     meta_era = luigi.Parameter(default="")
 
-    @property
-    def datacard_era(self):
-        return self.meta_era or self.period
-
     def get_sub_periods(self):
         return self.get_era_groups().get(self.datacard_era, [self.period])
 
