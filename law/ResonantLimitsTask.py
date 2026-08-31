@@ -12,7 +12,6 @@ from dhi.tasks.resonant import MergeResonantLimits
 from .StatInferenceTask import StatInferenceTask
 from .CreateDatacardsTask import CreateDatacardsTask
 
-
 # Key for the cross-era merge in run()'s dynamic-dependency dict. Not an era name,
 # and deliberately not one a configuration could declare.
 COMBINED_KEY = "__combined__"
