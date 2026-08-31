@@ -16,7 +16,8 @@ class Process:
         allow_negative_bins_within_error=False,
         max_n_sigma_for_negative_bins=1,
         allow_negative_integral=False,
-        channels=[],
+        channels=None,
+        categories=None,
     ):
         self.name = name
         self.hist_name = hist_name
@@ -31,7 +32,10 @@ class Process:
         self.allow_negative_bins_within_error = allow_negative_bins_within_error
         self.max_n_sigma_for_negative_bins = max_n_sigma_for_negative_bins
         self.allow_negative_integral = allow_negative_integral
-        self.channels = channels
+        # Copied into fresh lists: a mutable default is shared by every Process built
+        # without one, so appending to one process's list would edit them all.
+        self.channels = list(channels or [])
+        self.categories = list(categories or [])
         if is_data and is_signal:
             raise RuntimeError("Data and signal flags cannot be set simultaneously")
         if is_asimov_data and not is_data:
@@ -43,6 +47,23 @@ class Process:
             self.type = "data"
         else:
             self.type = "background"
+
+    def appliesToCategory(self, category):
+        """Whether this process contributes to `category`. Empty list = all of them.
+
+        An entry matches its own name, or that name followed by a slice suffix, so
+        "SR/boosted" covers SR/boosted_dnn0..3 without listing the slices: how many
+        slices a category is cut into is a binning parameter, and the process list should
+        not have to change when it does. The separator is required so that a plain
+        prefix test cannot also swallow a sibling base category -- "SR/boosted" is not
+        a statement about "SR/boosted2".
+        """
+        if not self.categories:
+            return True
+        return any(
+            category == prefix or category.startswith(prefix + "_")
+            for prefix in self.categories
+        )
 
     def __str__(self):
         str_rep = (
@@ -85,6 +106,7 @@ class Process:
         )
         max_n_sigma_for_negative_bins = entry.get("max_n_sigma_for_negative_bins", 1)
         channels = entry.get("channels", [])
+        categories = entry.get("categories", [])
         if type(scale) == str:
             scale = eval(scale)
         if "param_values" not in entry:
@@ -105,6 +127,7 @@ class Process:
                     max_n_sigma_for_negative_bins=max_n_sigma_for_negative_bins,
                     allow_negative_integral=allow_negative_integral,
                     channels=channels,
+                    categories=categories,
                 )
             ]
 
@@ -133,6 +156,7 @@ class Process:
                     allow_negative_integral=allow_negative_integral,
                     params=param_dict,
                     channels=channels,
+                    categories=categories,
                 )
             )
         return processes

@@ -293,11 +293,24 @@ class MultiValueLnNUncertainty(Uncertainty):
             # if not isinstance(processes, tuple) or not all(isinstance(p, str) for p in processes):
             #     raise ValueError(f"Invalid processes list: {processes}. Must be a list of strings.")
 
-    def getUncertaintyForProcess(self, process):
+    def getUncertaintyForProcess(self, process, era=None, channel=None, category=None):
         for key in self.values.keys():
             processes, eras, channels, categories = key
-            if process in processes:
-                return self.values[key]
+            # Every field here is a scope, `processes` included: empty means
+            # unrestricted. That is load-bearing -- lumi_1_13p6TeV in the bbWW DL config
+            # is scoped by era alone, because a luminosity uncertainty applies to every
+            # simulated process and listing them would be a list to keep in sync. The
+            # cost is that an entry which *meant* to name a process and forgot silently
+            # applies to all of them, so an entry that is about one process must say so.
+            if processes and process not in processes:
+                continue
+            if era is not None and eras and era not in eras:
+                continue
+            if channel is not None and channels and channel not in channels:
+                continue
+            if category is not None and categories and category not in categories:
+                continue
+            return self.values[key]
         return None
 
     def valueToMap(self, unc_value, digits=3):

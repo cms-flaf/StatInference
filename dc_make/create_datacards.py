@@ -34,7 +34,6 @@ if __name__ == "__main__":
         default=None,
         help="parameter values to run only certain masses",
     )
-
     for param in DatacardMaker.customizeble_parameters:
         parser.add_argument(
             f"--{param}",

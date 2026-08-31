@@ -1,0 +1,1336 @@
+import array
+import json
+import math
+import os
+import sys
+import yaml
+
+if __name__ == "__main__":
+    file_dir = os.path.dirname(os.path.abspath(__file__))
+    pkg_dir = os.path.dirname(file_dir)
+    base_dir = os.path.dirname(pkg_dir)
+    pkg_dir_name = os.path.split(pkg_dir)[1]
+    if base_dir not in sys.path:
+        sys.path.append(base_dir)
+    __package__ = pkg_dir_name
+
+from StatInference.common.tools import importROOT, CategoryNaming
+from StatInference.common.param_parse import extractParameters, applyParameters
+from StatInference.dc_make.model import Model
+
+ROOT = importROOT()
+
+
+# Written inside each era's own output directory, beside the shapes it describes, and
+# read back by --binning to replay them.
+BINNING_JSON = "binning.json"
+
+# The knobs that decide the binning, with the values a configuration gets when it does
+# not say otherwise. They belong to an analysis rather than to this file -- what a slice
+# needs to be worth keeping depends on the sample sizes and the selection, and a test
+# configuration wants them at zero -- so every production should state its own in a
+# binning yaml -- see config/Datacards/binning_2d.yaml in HH_bbWW for an annotated
+# set. This file ships no configuration of its own, only these fallbacks.
+# The figures of merit significance() implements. Named here so the yaml path can be
+# checked against the same list the command line's choices= uses.
+SIGNIFICANCE_MODES = ("sb", "asimov")
+
+BINNING_DEFAULTS = {
+    "n_slices": 4,
+    "category_pattern": None,  # None -> CategoryNaming's own neutral default
+    "slice_var": "x",
+    "max_bins_per_slice": 10,
+    "min_slice_bkg_sum": 1.0,
+    "min_slice_bkg_neff": 4.0,
+    "min_slice_bkg_each": 0.01,
+    "min_slice_bkg_each_neff": 0.0,
+    "min_bin_bkg_each": 0.01,
+    "min_bin_bkg_neff": 4.0,
+    "bkg_per_bin": 5.0,
+    "min_bkg_frac": 0.05,
+    "min_signal": 0.5,
+    "significance_mode": "asimov",
+}
+
+
+def load_binning_config(path, overrides=None):
+    """Merge the binning yaml over the defaults, then command-line overrides over that.
+
+    Unknown keys raise rather than being ignored: a misspelled floor that silently does
+    nothing is the failure mode worth spending an exception on.
+    """
+    declared = {}
+    if path:
+        with open(path, "r") as f:
+            declared = yaml.safe_load(f) or {}
+    unknown = set(declared) - set(BINNING_DEFAULTS)
+    if unknown:
+        raise RuntimeError(
+            f"{path}: unknown binning key(s) {sorted(unknown)}. "
+            f"Known keys: {sorted(BINNING_DEFAULTS)}."
+        )
+    knobs = dict(BINNING_DEFAULTS)
+    knobs.update(declared)
+    for key, value in (overrides or {}).items():
+        if value is not None:
+            knobs[key] = value
+    # The command line has choices= for this; the yaml had nothing, and significance()
+    # treats anything it does not recognise as "sb" -- so a typo silently changed the
+    # figure of merit every boundary is chosen by.
+    if knobs["significance_mode"] not in SIGNIFICANCE_MODES:
+        raise RuntimeError(
+            f"{path or 'binning configuration'}: significance_mode "
+            f"'{knobs['significance_mode']}' is not one of {sorted(SIGNIFICANCE_MODES)}."
+        )
+    return knobs
+
+
+def lookup_frozen(frozen_binning, era, mass, channel, category):
+    """The recorded binning for one channel/category, or None if it was skipped then.
+
+    A category absent from the record was skipped by the run that wrote it (too little
+    signal, or a background missing from a discovery era), so it is skipped again rather
+    than quietly re-optimised -- a replay that rebinned some categories and froze others
+    would be neither the old binning nor a new one.
+    """
+    return (
+        frozen_binning.get("binning", {})
+        .get(era, {})
+        .get(str(mass), {})
+        .get(channel, {})
+        .get(category)
+    )
+
+
+def load_config(config_path):
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+    model = Model.fromConfig(cfg["model"])
+    channels = cfg["channels"]
+    # Taken verbatim here; run() reduces them to the base categories the 2D input is
+    # actually keyed by, once it has the pattern to do it with.
+    categories = list(cfg["categories"])
+
+    # Several processes may carry is_signal (e.g. the bbWW(2l) and bbtautau decay
+    # modes of the same resonance, both scaled by the same signal strength). They
+    # are summed to form the discovery signal that steers the slice
+    # boundaries, so the binning is optimised for the total signal in the fit.
+    signal_hist_names = []
+    mass_values = None
+    background_entries = []
+    for entry in cfg["processes"]:
+        if type(entry) == str:
+            background_entries.append((entry, entry, []))
+            continue
+        if entry.get("is_data", False):
+            continue
+        base_name = entry["process"]
+        hist_name = entry.get("hist_name", base_name)
+        if entry.get("is_signal", False):
+            signal_hist_names.append(hist_name)
+            if mass_values is None:
+                mass_values = entry["param_values"]
+            elif list(entry["param_values"]) != list(mass_values):
+                raise RuntimeError(
+                    f"Signal {hist_name} has param_values {entry['param_values']}, "
+                    f"which differ from {mass_values}; every signal must be defined "
+                    "at the same mass points"
+                )
+        else:
+            background_entries.append((base_name, hist_name, entry.get("channels", [])))
+
+    if not signal_hist_names:
+        raise RuntimeError("No signal process found in config")
+
+    return {
+        "model": model,
+        "channels": channels,
+        "categories": categories,
+        "era_groups": cfg.get("era_groups", {}),
+        # Declared by a configuration that reads sliced shapes, so that run() can check
+        # it against the pattern the shapes are actually written with. None when the
+        # configuration names no pattern, and then there is nothing to check.
+        "category_pattern": cfg.get("category_pattern"),
+        "signal_hist_name_patterns": signal_hist_names,
+        "signal_param_name": extractParameters(signal_hist_names[0])[0],
+        "mass_values": mass_values,
+        "background_entries": background_entries,
+    }
+
+
+def open_input_file(input_dir, model, era, mass, param_name):
+    file_name = model.getInputFileName(era, {param_name: mass})
+    full_path = os.path.join(input_dir, file_name)
+    f = ROOT.TFile.Open(full_path, "READ")
+    if f is None or f.IsZombie():
+        raise RuntimeError(f"Cannot open file {full_path}")
+    return f
+
+
+def _detach(h):
+    """Detach a histogram from its TFile and hand ownership to Python.
+
+    SetDirectory(0) alone makes the histogram survive the file's close, but
+    leaves it owned by nobody -- so every 2D histogram read here (one per
+    systematic variation, per category, per mass) leaked for the lifetime of the
+    process. Across the ten-mass loop that grew without bound and got the job
+    SIGKILLed partway through the final mass, leaving a truncated ROOT file.
+    SetOwnership makes the object die with its last Python reference.
+    """
+    h.SetDirectory(0)
+    ROOT.SetOwnership(h, True)
+    return h
+
+
+def get_hist(f, path):
+    h = f.Get(path)
+    # TFile.Get() on a fully-missing nested path can return a PyROOT wrapper
+    # around a null C++ pointer, which is not `is None` but is falsy.
+    if not h:
+        return None
+    return _detach(h)
+
+
+def sum_hists(hists):
+    total = None
+    for h in hists:
+        if h is None:
+            continue
+        if total is None:
+            total = _detach(h.Clone())
+        else:
+            total.Add(h)
+    return total
+
+
+def _integral(hist, lo, hi):
+    return (
+        hist.Integral(lo, hi, 0, -1)
+        if hist.GetDimension() == 2
+        else hist.Integral(lo, hi)
+    )
+
+
+def _integral_and_error(hist, lo, hi):
+    """(yield, MC statistical error) over [lo, hi]."""
+    err = array.array("d", [0.0])
+    if hist.GetDimension() == 2:
+        value = hist.IntegralAndError(lo, hi, 0, -1, err)
+    else:
+        value = hist.IntegralAndError(lo, hi, err)
+    return value, err[0]
+
+
+def _bkg_yields(bkg_hists_by_name, lo, hi):
+    """For each background, the summed yield across all discovery eras (combined
+    statistics). Individual eras are not required to individually clear the
+    threshold -- use allow_negative_bins_within_error (maker.py, per process/
+    category) for backgrounds/categories where a specific era can land negative
+    in a bin that's fine once combined."""
+    return {
+        name: sum(_integral(h, lo, hi) for h in hists)
+        for name, hists in bkg_hists_by_name.items()
+    }
+
+
+def _bkg_errors(bkg_hists_by_name, lo, hi):
+    """Per background, the MC statistical error on the summed yield (eras added in
+    quadrature)."""
+    return {
+        name: math.sqrt(sum(_integral_and_error(h, lo, hi)[1] ** 2 for h in hists))
+        for name, hists in bkg_hists_by_name.items()
+    }
+
+
+def _total_bkg_error(bkg_hists_by_name, lo, hi):
+    errors = _bkg_errors(bkg_hists_by_name, lo, hi)
+    return math.sqrt(sum(e**2 for e in errors.values()))
+
+
+def effective_entries(value, error):
+    """(yield / error)^2 -- the unweighted MC event count a weighted yield is worth.
+
+    A DY slice holding a couple of very-high-weight aMC@NLO events can carry a
+    sizeable yield with an effective count far below 1, i.e. a background estimate
+    that is statistically compatible with almost anything.
+    """
+    if error <= 0:
+        return float("inf") if value > 0 else 0.0
+    return (value / error) ** 2
+
+
+def asimov_significance(s, b, b_err=0.0):
+    """Median discovery significance for a counting experiment (Cowan et al.,
+    arXiv:1007.1727), with the background uncertainty folded in when given.
+
+    Reduces to sqrt(2*((s+b)*ln(1+s/b) - s)) for b_err = 0. Unlike S/sqrt(B) this
+    stays valid when b is O(1), which is exactly the regime the high-mass boosted
+    slices live in -- there S/sqrt(B) reports significances of ~30 on ~1.5
+    background events, and drives the slice boundary on that basis.
+    """
+    if b <= 0 or s <= 0:
+        return 0.0
+    if b_err <= 0:
+        return math.sqrt(max(2.0 * ((s + b) * math.log1p(s / b) - s), 0.0))
+    var = b_err**2
+    term1 = (s + b) * math.log(((s + b) * (b + var)) / (b * b + (s + b) * var))
+    term2 = (b * b / var) * math.log1p(var * s / (b * (b + var)))
+    return math.sqrt(max(2.0 * (term1 - term2), 0.0))
+
+
+def significance(s, b, b_err=0.0, mode="sb"):
+    """Figure of merit steering the slice boundaries.
+
+    mode="sb":     S / sqrt(B + sigma_B^2). Folding sigma_B into plain S/sqrt(B)
+                   stops a downward fluctuation of a statistics-starved background
+                   (DY in the b-tagged muMu slices, effective MC count <1) from
+                   inflating the apparent significance. Still assumes the Gaussian
+                   regime, which breaks down for B of order a few.
+    mode="asimov": the Poisson-correct Asimov significance, valid at low B.
+    """
+    if b is None or b <= 0:
+        return 0.0
+    if mode == "asimov":
+        return asimov_significance(s, b, b_err)
+    denominator = b + b_err**2
+    if denominator <= 0:
+        return 0.0
+    return s / (denominator**0.5)
+
+
+def _slice_passes(
+    yields,
+    min_sum,
+    total_error=None,
+    min_neff=0.0,
+    errors=None,
+    min_each=0.0,
+    min_proc_neff=0.0,
+    exempt=(),
+):
+    """Slice validity: the summed background must clear min_sum, and be known
+    to better than min_neff effective MC entries -- a window whose background is
+    statistically undetermined must not be selectable at all.
+
+    The per-process arms (min_each, min_proc_neff) are what _bin_passes already
+    does on the mass axis, applied here as well. Testing only the sum hides an
+    individual background that has fluctuated negative behind a large, well
+    measured neighbour: muMu/SR/res2b at m500 selected a slice holding
+    DY = -5.87 +- 8.92 (N_eff 0.43) because the summed background there was
+    +39.9 +- 9.0 (N_eff 22), clearing both summed tests comfortably. That slice
+    cannot be turned into a datacard at all -- a negative DY integral is rejected
+    outright by resolveNegativeBins -- so the binning has to not select it in the
+    first place. Worse, the significance being maximised is S/sqrt(B + sigma_B^2),
+    which a downward fluctuation *increases* by lowering B, so such a window is
+    mildly preferred rather than merely tolerated.
+
+    `exempt` comes from minor_backgrounds() judged over the whole sliced-axis range of the
+    category, never over the candidate window: a background that is negligible in
+    this category must not be able to veto every boundary, and judging it inside
+    the window under test is circular (a background that is exactly zero there is
+    trivially below any fraction of the total).
+    """
+    total = sum(yields.values())
+    if total <= min_sum:
+        return False
+    if min_neff > 0 and total_error is not None:
+        if effective_entries(total, total_error) < min_neff:
+            return False
+    if min_each > 0 or min_proc_neff > 0:
+        for name, value in yields.items():
+            if name in exempt:
+                continue
+            if value <= min_each:
+                return False
+            if min_proc_neff > 0 and errors is not None:
+                if effective_entries(value, errors.get(name, 0.0)) < min_proc_neff:
+                    return False
+    return True
+
+
+def minor_backgrounds(bkg_hists_by_name, lo, hi, min_frac):
+    """Backgrounds negligible over the *whole* [lo, hi] range, which may therefore
+    be exempted from the per-bin min_each floor.
+
+    This must be judged once over the full slice, never inside the candidate bin
+    under test. Evaluating the fraction per bin is circular: a background that is
+    exactly zero in that bin is trivially below any fraction of the bin total, so
+    it is always exempted -- which is precisely the case the floor exists to
+    catch. That let a bin through with TT = 0 in a slice where TT is 94% of the
+    background (m300, eMu, res2b_dnn2).
+    """
+    if min_frac <= 0:
+        return set()
+    yields = _bkg_yields(bkg_hists_by_name, lo, hi)
+    total = sum(yields.values())
+    if total <= 0:
+        return set()
+    return {name for name, value in yields.items() if value < min_frac * total}
+
+
+def _bin_passes(yields, min_each, exempt=(), total_error=None, min_neff=0.0):
+    """Mass-bin validity: every *relevant* background must exceed min_each, and
+    (when min_neff > 0) the summed background must be known to at least min_neff
+    effective MC entries.
+
+    `exempt` is the set of backgrounds judged negligible across the whole slice by
+    minor_backgrounds(); they are excused from min_each so that a process worth
+    0.4% of the yield -- and known only to a few hundred percent -- cannot veto
+    every candidate split, which would make find_bins() back off all the way
+    to a single bin and discard the mass shape in exactly the high-significance
+    slices that matter most.
+
+    The min_neff arm is the same gate _slice_passes() applies to slice boundaries.
+    Applying it only there left the mass bins *inside* each slice ungated, and
+    since that is where essentially every fit bin lives, the median per-bin
+    effective background count came out at ~2.8 against a slice threshold of 4.
+    Note it constrains only the *summed* background, so it is satisfied by any one
+    well-measured process; min_each/exempt is what protects the individual ones.
+    """
+    total = sum(yields.values())
+    if min_neff > 0 and total_error is not None:
+        if effective_entries(total, total_error) < min_neff:
+            return False
+    for name, value in yields.items():
+        if name in exempt:
+            continue
+        if value <= min_each:
+            return False
+    return True
+
+
+def grow_slice(
+    sig_hist,
+    bkg_hists_by_name,
+    right,
+    first_bin,
+    min_sum,
+    min_neff=0.0,
+    sig_mode="sb",
+    min_each=0.0,
+    min_proc_neff=0.0,
+    exempt=(),
+):
+    """Among every candidate [left, right] with summed background > min_sum,
+    pick the one maximizing S/sqrt(B + sigma_B^2) -- not just the first one that
+    clears it. This is what actually drives where the cut lands; the content
+    floor is only a validity gate. Falls back to first_bin (best effort) if no
+    candidate clears the floor anywhere."""
+    best_left = None
+    best_sig = -1.0
+    for left in range(right, first_bin - 1, -1):
+        bkg_y = _bkg_yields(bkg_hists_by_name, left, right)
+        b_err = _total_bkg_error(bkg_hists_by_name, left, right)
+        bkg_e = (
+            _bkg_errors(bkg_hists_by_name, left, right) if min_proc_neff > 0 else None
+        )
+        if not _slice_passes(
+            bkg_y,
+            min_sum,
+            b_err,
+            min_neff,
+            bkg_e,
+            min_each,
+            min_proc_neff,
+            exempt,
+        ):
+            continue
+        s = _integral(sig_hist, left, right)
+        b = sum(bkg_y.values())
+        sig = significance(s, b, b_err, sig_mode)
+        if sig > best_sig:
+            best_sig = sig
+            best_left = left
+    return best_left if best_left is not None else first_bin
+
+
+def find_slices(
+    sig_hist,
+    bkg_hists_by_name,
+    n_slices,
+    first_bin,
+    last_bin,
+    min_sum,
+    min_neff=0.0,
+    sig_mode="sb",
+    min_each=0.0,
+    min_proc_neff=0.0,
+    min_frac=0.0,
+):
+    """Split [first_bin, last_bin] into exactly `n_slices` ranges (fixed count,
+    required so every mass point shares the same category list), scanning right
+    to left. Each slice (except the final, leftover one) is placed to maximize
+    signal significance among boundaries with summed background > min_sum.
+
+    Which backgrounds are minor enough to be exempt from the per-process floors is
+    decided once here, over the whole [first_bin, last_bin] range, and held fixed
+    for every candidate window -- see _slice_passes on why it cannot be re-judged
+    per window.
+    """
+    exempt = (
+        minor_backgrounds(bkg_hists_by_name, first_bin, last_bin, min_frac)
+        if (min_each > 0 or min_proc_neff > 0)
+        else set()
+    )
+    slices = []
+    right = last_bin
+    for slice_idx in range(n_slices):
+        if slice_idx == n_slices - 1 or right <= first_bin:
+            if right < first_bin:
+                # The axis ran out before n_slices boundaries were placed. Reported as
+                # None rather than invented: the previous code emitted (0,0), (-1,-1),
+                # (-2,-2) here to keep the count, and ROOT reads any range whose upper
+                # bound is below its lower one as the *whole axis including overflow* --
+                # so those became copies of the full plane, and the same events entered
+                # the fit two or three times as independent categories. discover_binning
+                # rejects the category instead.
+                slices.append(None)
+                continue
+            slices.append((first_bin, right))
+            right = first_bin - 1
+            continue
+        left = grow_slice(
+            sig_hist,
+            bkg_hists_by_name,
+            right,
+            first_bin,
+            min_sum,
+            min_neff,
+            sig_mode,
+            min_each,
+            min_proc_neff,
+            exempt,
+        )
+        slices.append((left, right))
+        right = left - 1
+    slices.reverse()
+    return slices
+
+
+def signal_quantile_ranges(sig_hist, n_bins, first_bin, last_bin):
+    """Split [first_bin, last_bin] into `n_bins` ranges each holding an equal share
+    of the signal.
+
+    This is what puts the bins where the resonance is. The axis is the same range at
+    every mass point (bbWW's HME runs 0-1500 GeV), so the signal occupies a narrow
+    window whose position moves with MX while the axis does not; binning must follow
+    the signal rather than the axis. Equal-signal quantiles do that automatically -- bin edges
+    cluster wherever dS/dm is large (the peak) and a single wide bin absorbs the
+    long empty stretches on either side.
+
+    The CDF clamps negative bin contents to zero so it stays monotonic; a
+    statistical undershoot in a signal MC bin must not move an edge backwards.
+    """
+    n_avail = last_bin - first_bin + 1
+    n_bins = max(1, min(n_bins, n_avail))
+    if n_bins == 1:
+        return [(first_bin, last_bin)]
+
+    cumulative = []
+    running = 0.0
+    for b in range(first_bin, last_bin + 1):
+        running += max(sig_hist.GetBinContent(b), 0.0)
+        cumulative.append(running)
+    total = running
+    if total <= 0:
+        return [(first_bin, last_bin)]
+
+    ranges = []
+    lo = first_bin
+    for k in range(1, n_bins):
+        target = k * total / n_bins
+        b = lo
+        while b < last_bin and cumulative[b - first_bin] < target:
+            b += 1
+        # every one of the n_bins-k ranges still to come needs at least one bin
+        b = max(lo, min(b, last_bin - (n_bins - k)))
+        ranges.append((lo, b))
+        lo = b + 1
+    ranges.append((lo, last_bin))
+    return ranges
+
+
+def merge_until_valid(
+    ranges, sig_hist, bkg_hists_by_name, min_each, exempt=(), min_neff=0.0
+):
+    """Merge adjacent ranges until every one satisfies the background gates.
+
+    The signal quantiles decide where the edges want to be; this decides how many
+    of them the background statistics can actually support. A failing range is
+    merged into whichever neighbour holds *less* signal, so the dense bins around
+    the peak -- the ones carrying the discrimination -- are the last to be given
+    up. Terminates because every step removes one range, ending at the single
+    full-range bin, which has nothing left to fail against.
+    """
+    ranges = list(ranges)
+    while len(ranges) > 1:
+        bad = None
+        for i, (lo, hi) in enumerate(ranges):
+            if not _bin_passes(
+                _bkg_yields(bkg_hists_by_name, lo, hi),
+                min_each,
+                exempt,
+                _total_bkg_error(bkg_hists_by_name, lo, hi),
+                min_neff,
+            ):
+                bad = i
+                break
+        if bad is None:
+            break
+        if bad == 0:
+            other = 1
+        elif bad == len(ranges) - 1:
+            other = bad - 1
+        else:
+            left_sig = sig_hist.Integral(*ranges[bad - 1])
+            right_sig = sig_hist.Integral(*ranges[bad + 1])
+            other = bad - 1 if left_sig <= right_sig else bad + 1
+        first, second = min(bad, other), max(bad, other)
+        ranges[first : second + 1] = [(ranges[first][0], ranges[second][1])]
+    return ranges
+
+
+def find_bins(
+    sig_hist,
+    bkg_hists_by_name,
+    max_bins,
+    first_bin,
+    last_bin,
+    min_each,
+    min_frac=0.0,
+    min_neff=0.0,
+):
+    """Bins inside one slice: signal quantiles for the edges, background gates for
+    the count.
+
+    The two axes need opposite rules, which is why this is not find_slices(). The
+    previous version scanned right-to-left growing each bin leftward until the
+    backgrounds cleared their floors, mirroring find_slices(). That is right for the
+    sliced axis, where the signal piles up at one end so resolution belongs there, and
+    wrong for an axis whose signal sits in the middle with both tails empty -- as
+    bbWW's HME does, peaking at HME ~ MX.
+    Starting from the top of the axis spent the bin budget on the empty
+    upper tail and left the entire resonance peak in the single leftover bin:
+    at MX=600 in muMu/res2b_dnn3, one bin covered 0-710 GeV holding 97.5% of the
+    signal while five bins shared the 710-1500 GeV region holding 2.5%. The fit
+    then had no shape to work with in the only region where signal and background
+    differ.
+    """
+    # which backgrounds count as negligible is decided once, over the whole slice
+    exempt = minor_backgrounds(bkg_hists_by_name, first_bin, last_bin, min_frac)
+    ranges = signal_quantile_ranges(sig_hist, max_bins, first_bin, last_bin)
+    return merge_until_valid(
+        ranges, sig_hist, bkg_hists_by_name, min_each, exempt, min_neff
+    )
+
+
+def extend_outer_edges(ranges, full_lo, full_hi):
+    """Widen the first/last range to swallow under/overflow (bin 0 / nbins+1),
+    so no events are silently dropped at the extremes of the axis.
+
+    Only real ranges are widened. Widening a None (an exhausted slice) would invent one,
+    and widening past a None would put the underflow on a range that is not the outermost
+    -- so a list containing any None is left alone and rejected by the caller.
+    """
+    ranges = list(ranges)
+    if any(r is None for r in ranges):
+        return ranges
+    ranges[0] = (full_lo, ranges[0][1])
+    ranges[-1] = (ranges[-1][0], full_hi)
+    return ranges
+
+
+def bin_budget(bkg_hists_by_name, lo, hi, max_bins_per_slice, bkg_per_bin):
+    """How many bins this slice can actually afford.
+
+    A fixed max_bins_per_slice is applied blind to slice content: the high-mass boosted
+    slices hold ~1.5 total background events and were still being split into 10
+    bins, i.e. ~0.15 events per bin. Capping at B_slice / bkg_per_bin ties the
+    binning to the statistics that are really there. Returns max_bins_per_slice
+    unchanged when bkg_per_bin <= 0 (feature off).
+    """
+    if bkg_per_bin <= 0:
+        return max_bins_per_slice
+    total = sum(_bkg_yields(bkg_hists_by_name, lo, hi).values())
+    if total <= 0:
+        return 1
+    return max(1, min(max_bins_per_slice, int(total / bkg_per_bin)))
+
+
+def discover_binning(
+    sig2d,
+    bkg2d_by_name,
+    n_slices,
+    max_bins_per_slice,
+    min_slice_sum,
+    min_bin_each,
+    min_slice_bkg_neff=0.0,
+    min_bkg_frac=0.0,
+    min_bin_bkg_neff=0.0,
+    bkg_per_bin=0.0,
+    sig_mode="sb",
+    min_slice_bkg_each=0.0,
+    min_slice_bkg_each_neff=0.0,
+):
+    """bkg2d_by_name: {background_name: [hist per discovery era, ...]}. The list
+    is usually a single era's own histogram (standalone limit) or all of a
+    meta-era's sub-eras (combined limit) -- see --discovery-eras.
+    Yields are summed across whatever's in the list; see _bkg_yields(). sig2d is
+    the same discovery reference's (already-summed) signal histogram: its x
+    projection picks the significance-maximizing slice boundaries, and its y
+    projection within each slice places the mass bin edges by signal quantile."""
+    any_hist = next(iter(bkg2d_by_name.values()))[0]
+    nx = any_hist.GetNbinsX()
+    ny = any_hist.GetNbinsY()
+    slices = find_slices(
+        sig2d,
+        bkg2d_by_name,
+        n_slices,
+        1,
+        nx,
+        min_slice_sum,
+        min_slice_bkg_neff,
+        sig_mode,
+        min_slice_bkg_each,
+        min_slice_bkg_each_neff,
+        min_bkg_frac,
+    )
+    if any(sl is None for sl in slices):
+        # The axis could not carry n_slices boundaries: the significance scan reached
+        # first_bin with slices still to place, usually because no window anywhere clears
+        # the background floors. There is no honest binning to return -- an exhausted
+        # slice is neither a selection nor an empty one, since every mass point has to
+        # share the same category list -- so the category is refused here and skipped by
+        # the caller, the same way one with too little signal is.
+        return None
+    slices = extend_outer_edges(slices, 0, nx + 1)
+
+    result = []
+    for xlo, xhi in slices:
+        # ProjectionY attaches its result to gDirectory (here, the open output
+        # file); detach so these die with the loop iteration instead of piling up
+        # in the output file's in-memory object list.
+        bkg_y_by_name = {
+            name: [
+                _detach(h.ProjectionY(f"_disc_{name}_{xlo}_{xhi}_{i}_y", xlo, xhi, "e"))
+                for i, h in enumerate(hists)
+            ]
+            for name, hists in bkg2d_by_name.items()
+        }
+        sig_y = _detach(sig2d.ProjectionY(f"_disc_sig_{xlo}_{xhi}_y", xlo, xhi, "e"))
+        n_bins = bin_budget(bkg_y_by_name, 1, ny, max_bins_per_slice, bkg_per_bin)
+        bin_ranges = find_bins(
+            sig_y,
+            bkg_y_by_name,
+            n_bins,
+            1,
+            ny,
+            min_bin_each,
+            min_bkg_frac,
+            min_bin_bkg_neff,
+        )
+        bin_ranges = extend_outer_edges(bin_ranges, 0, ny + 1)
+        result.append({"x_range": (xlo, xhi), "y_ranges": bin_ranges})
+    return result
+
+
+def bin_edges(y_axis, y_ranges):
+    """Physical edges of the discovered y ranges, for booking the output TH1.
+
+    The rebinned shapes used to be booked as n_bins over [0, n_bins], which threw
+    the axis scale away and left every plot labelled by bin index. The ranges are
+    contiguous and ordered, so the edges are each range's low edge plus the last
+    range's upper edge. extend_outer_edges() pushes the outer ranges into the
+    underflow/overflow bins, which have no finite edge of their own -- those are
+    clamped to the axis limits.
+    """
+    n = y_axis.GetNbins()
+    edges = [y_axis.GetBinLowEdge(max(lo, 1)) for lo, _ in y_ranges]
+    edges.append(y_axis.GetBinUpEdge(min(y_ranges[-1][1], n)))
+    return edges
+
+
+def mkdir_titled(directory, path, title):
+    """mkdir a nested path, putting `title` on the leaf directory only.
+
+    TDirectory.mkdir() given a slashed path applies the title to the *first* level and
+    hands the rest of the path down as the sub-levels' titles, so every parent would end
+    up labelled with a stale fragment of whichever slice was created first ("muMu" titled
+    "muMu/SR/res2b_dnn0"). Walking the components keeps the parents clean and puts the
+    label where it belongs.
+    """
+    parts = path.split("/")
+    for part in parts[:-1]:
+        directory = directory.GetDirectory(part) or directory.mkdir(part)
+    return directory.mkdir(parts[-1], title)
+
+
+def format_var_range(lo, hi, var):
+    """One slice's edges on the sliced axis as a selection label, e.g. "1.20 < DNN < 4.50".
+
+    `var` names that axis and comes from the configuration -- this script does not assume
+    the analysis slices on a DNN score.
+
+    Formatted here, by the code that discovered the edges, so the label travels with the
+    histograms and nothing downstream has to re-derive it. Both edges open means the slice
+    covers the whole axis, i.e. there is no selection to state -- that returns an empty
+    string rather than a vacuous label.
+    """
+    if lo is None and hi is None:
+        return ""
+    if lo is None:
+        return f"{var} < {hi:.2f}"
+    if hi is None:
+        return f"{var} > {lo:.2f}"
+    return f"{lo:.2f} < {var} < {hi:.2f}"
+
+
+def slice_ranges(x_axis, slices):
+    """Physical edges of the discovered slices on the sliced axis, as [[lo, hi], ...].
+
+    The slice x_ranges are bin indices, and extend_outer_edges() has already pushed the
+    outermost ones into underflow/overflow -- those have no finite edge, so they are
+    recorded as null and read back as an open-ended selection. Written out by run() so
+    the plots can say which selection each slice actually is; nothing downstream of
+    the datacards needs it.
+    """
+    n = x_axis.GetNbins()
+    ranges = []
+    for sl in slices:
+        lo, hi = sl["x_range"]
+        ranges.append(
+            [
+                None if lo < 1 else x_axis.GetBinLowEdge(lo),
+                None if hi > n else x_axis.GetBinUpEdge(hi),
+            ]
+        )
+    return ranges
+
+
+def slices_to_record(slices, x_axis, y_axis):
+    """The discovered structure as plain data, for binning.json.
+
+    Both forms are written. The bin index ranges are what the code actually cuts on and
+    are what a replay restores; the physical edges alongside them are what a human reads,
+    and what makes the record meaningful next to a plot.
+    """
+    return {
+        "n_x_bins": x_axis.GetNbins(),
+        "n_y_bins": y_axis.GetNbins(),
+        "slices": [
+            {
+                "x_range": list(sl["x_range"]),
+                "x_edges": x_edges,
+                "y_ranges": [list(r) for r in sl["y_ranges"]],
+                "y_edges": bin_edges(y_axis, sl["y_ranges"]),
+            }
+            for sl, x_edges in zip(slices, slice_ranges(x_axis, slices))
+        ],
+    }
+
+
+def record_to_slices(record, x_axis, y_axis, where):
+    """Inverse of slices_to_record(): what discover_binning() would have returned.
+
+    The axis sizes are checked rather than trusted. Bin indices only mean anything against
+    the axes they were found on, so a binning.json replayed over input with a different
+    binning would otherwise cut the shapes in silently wrong places -- which is exactly
+    what freezing a binning is supposed to rule out.
+    """
+    for name, axis, recorded in (
+        ("x", x_axis, record["n_x_bins"]),
+        ("y", y_axis, record["n_y_bins"]),
+    ):
+        if axis.GetNbins() != recorded:
+            raise RuntimeError(
+                f"{where}: recorded binning was found on a {recorded}-bin {name} axis, "
+                f"but the input has {axis.GetNbins()}. The binning.json does not belong "
+                "to this input."
+            )
+    return [
+        {
+            "x_range": tuple(sl["x_range"]),
+            "y_ranges": [tuple(r) for r in sl["y_ranges"]],
+        }
+        for sl in record["slices"]
+    ]
+
+
+def rebin_hist_2d(hist2d, slices, name, naming):
+    """Given the discovered slice structure, produce one final TH1 per slice
+    for this specific histogram (nominal or a systematic variation)."""
+    outputs = []
+    for slice_idx, sl in enumerate(slices):
+        xlo, xhi = sl["x_range"]
+        # ROOT reinterprets an inverted or negative range as the full axis including
+        # under/overflow, silently and with a plausible-looking positive yield, so an
+        # invalid range must never reach IntegralAndError below. Checked here rather
+        # than trusted because this is the last point where it is still cheap to say so.
+        if not 0 <= xlo <= xhi:
+            raise RuntimeError(
+                f"invalid x bin range ({xlo}, {xhi}) for slice {slice_idx} of {name}; "
+                "ROOT would read this as the whole plane."
+            )
+        edges = array.array("d", bin_edges(hist2d.GetYaxis(), sl["y_ranges"]))
+        # Detached for the same reason as the projections above: Write() targets
+        # gDirectory regardless, so nothing needs these to stay attached.
+        h = _detach(
+            ROOT.TH1D(
+                naming.name(name, slice_idx),
+                name,
+                len(edges) - 1,
+                edges,
+            )
+        )
+        for bin_idx, (ylo, yhi) in enumerate(sl["y_ranges"], start=1):
+            err = array.array("d", [0.0])
+            content = hist2d.IntegralAndError(xlo, xhi, ylo, yhi, err)
+            h.SetBinContent(bin_idx, content)
+            h.SetBinError(bin_idx, err[0])
+        outputs.append(h)
+    return outputs
+
+
+def process_category(
+    sources,
+    channel,
+    category,
+    cfg,
+    mass,
+    era,
+    discovery_files,
+    knobs,
+    frozen=None,
+    replaying=False,
+):
+    """Rebin one channel/category, returning the binning it used (None if skipped).
+
+    The edges are discovered once from `discovery_files` -- every source era summed -- and
+    then applied to each source era separately, so a group era's members are cut on the
+    combination's statistics but stay in their own files. The datacard step still sums
+    them, which is what keeps a per-era lnN expressible: scaling one sub-era's own shape
+    needs that sub-era to still exist as a shape.
+
+    `sources` is [(source_era, in_file, out_file)]; for a plain era there is one.
+
+    With `replaying` set the edges come from a previous run's binning.json and no
+    optimisation happens at all: the discovery files are then only read for the axes,
+    the content gates are not applied, and `frozen` being None means the record does not
+    hold this category -- which is a skip, not a licence to derive one.
+    """
+    min_signal = knobs["min_signal"]
+    # The resonance parameter is named by the configuration, not by this script -- it is
+    # "MX" for bbWW but the slicing knows nothing about which parameter it is scanning.
+    param_name = cfg["signal_param_name"]
+    prefix = f"{channel}/{category}/"
+    # The key list comes from the first source era; a systematic that only some eras carry
+    # is filled in from their nominal when the slices are written below.
+    cat_dir = sources[0][1].Get(f"{channel}/{category}")
+    if not cat_dir:
+        print(f"  [skip] {channel}/{category}: not found in {sources[0][1].GetName()}")
+        return
+
+    signal_keys = [
+        applyParameters(pattern, {cfg["signal_param_name"]: mass})
+        for pattern in cfg["signal_hist_name_patterns"]
+    ]
+    background_names = [
+        hist_name
+        for (base_name, hist_name, allowed_channels) in cfg["background_entries"]
+        if not allowed_channels or channel in allowed_channels
+    ]
+
+    def load2d(f, key):
+        return get_hist(f, prefix + key)
+
+    disc_sig = sum_hists(
+        [load2d(f, key) for f in discovery_files for key in signal_keys]
+    )
+    disc_bkg_by_name = {}
+    for bkg_key in background_names:
+        per_era = [load2d(f, bkg_key) for f in discovery_files]
+        per_era = [h for h in per_era if h is not None]
+        if len(per_era) == len(discovery_files):
+            disc_bkg_by_name[bkg_key] = per_era
+
+    sig_integral = disc_sig.Integral() if disc_sig is not None else 0
+    if replaying:
+        # A replay reproduces a recorded category set exactly, or it is not a replay.
+        # The gates below decide which categories get binned; re-running them against a
+        # new input can only disagree with the record -- a category whose signal has
+        # since dipped under min_signal would be dropped even though its edges are
+        # written down, which is precisely the drift freezing exists to prevent.
+        if frozen is None:
+            print(
+                f"    [skip] {channel}/{category} {param_name}={mass}: not in the "
+                "binning record, so it was skipped by the run that wrote it; skipped "
+                "again rather than optimised afresh."
+            )
+            return
+        if disc_sig is None:
+            raise RuntimeError(
+                f"{era}/{param_name}={mass}/{channel}/{category} is in the binning "
+                "record, but its signal histogram is missing from the input, so the "
+                "axes the recorded bin indices refer to cannot be read."
+            )
+    elif disc_sig is None or sig_integral < min_signal or not disc_bkg_by_name:
+        if not disc_bkg_by_name:
+            reason = "no background histograms found in all discovery eras"
+        else:
+            reason = f"signal too small for discovery ({sig_integral} < {min_signal})"
+        print(
+            f"    [skip] {channel}/{category} {param_name}={mass}: {reason}, skipping"
+        )
+        return
+
+    where = f"{era}/{param_name}={mass}/{channel}/{category}"
+    if frozen is not None:
+        slices = record_to_slices(
+            frozen, disc_sig.GetXaxis(), disc_sig.GetYaxis(), where
+        )
+    else:
+        slices = discover_binning(
+            disc_sig,
+            disc_bkg_by_name,
+            knobs["n_slices"],
+            knobs["max_bins_per_slice"],
+            knobs["min_slice_bkg_sum"],
+            knobs["min_bin_bkg_each"],
+            knobs["min_slice_bkg_neff"],
+            knobs["min_bkg_frac"],
+            knobs["min_bin_bkg_neff"],
+            knobs["bkg_per_bin"],
+            knobs["significance_mode"],
+            knobs["min_slice_bkg_each"],
+            knobs["min_slice_bkg_each_neff"],
+        )
+        if slices is None:
+            print(
+                f"    [skip] {channel}/{category} {param_name}={mass}: the "
+                f"{knobs['n_slices']} slices could not be placed -- the axis was "
+                "exhausted before the last boundary, so no window clears the background "
+                "floors. Lower n_slices or the floors for this configuration."
+            )
+            return
+
+    # The selection each slice stands for is otherwise nowhere in the output: the sliced
+    # categories are named by index and the surviving axis is the rebinned one. It is the
+    # slice directory's own title, so it travels with the histograms and there is no
+    # side-car path to hand a reader correctly and no key name for the two ends to agree
+    # on -- anything that can open the shapes can already read it.
+    naming = cfg["naming"]
+    ranges = slice_ranges(disc_sig.GetXaxis(), slices)
+
+    # One shared set of edges, applied to every source era in its own file.
+    for source_era, in_file, out_file in sources:
+        for slice_idx in range(len(slices)):
+            mkdir_titled(
+                out_file,
+                f"{channel}/{naming.name(category, slice_idx)}",
+                format_var_range(*ranges[slice_idx], var=cfg["slice_var"]),
+            )
+        cat_dir = in_file.Get(f"{channel}/{category}")
+        if not cat_dir:
+            print(f"  [skip] {source_era} {channel}/{category}: not in the input")
+            continue
+        for key in [k.GetName() for k in cat_dir.GetListOfKeys()]:
+            hist2d = get_hist(in_file, prefix + key)
+            if hist2d is None or hist2d.GetDimension() != 2:
+                continue
+            for slice_idx, h in enumerate(rebin_hist_2d(hist2d, slices, key, naming)):
+                out_file.cd(f"{channel}/{naming.name(category, slice_idx)}")
+                h.Write(key)
+
+    return slices_to_record(slices, disc_sig.GetXaxis(), disc_sig.GetYaxis())
+
+
+def run(
+    input_dir,
+    output_dir,
+    config_path,
+    era,
+    knobs,
+    frozen_binning=None,
+):
+    """Produce one era of the datacard configuration's `eras:` list.
+
+    Which era it is decides everything. A plain era is binned on its own statistics, for
+    a standalone limit. An era that is a key of `era_groups:` is binned on its members'
+    summed statistics -- a combination supports finer bins than any single era can -- and
+    those edges are then applied to each member separately.
+
+    Output layout is "<output_dir>/<source_era>/<variable>/<variable>.root", plus the
+    binning.json that produced it. One era per --output directory, since the same source
+    era carries different edges under different target eras and they must not overwrite
+    each other. The members are kept in their own files rather than summed here: the
+    datacard step sums them, and a per-era lnN can only be built by scaling a sub-era's
+    own shape, which a pre-summed shape no longer has.
+    """
+    cfg = load_config(config_path)
+    # A replay is bound by the record, not by the current knobs. The pattern the shapes
+    # were written with and the axis they were sliced on are properties of that binning,
+    # and binning.json stores both precisely so a replay does not depend on being handed
+    # the same --binning-config again. Taking them from the knobs meant a standalone
+    # replay without it silently wrote its categories under different names.
+    pattern = knobs["category_pattern"]
+    slice_var = knobs["slice_var"]
+    if frozen_binning is not None:
+        pattern = frozen_binning.get("category_pattern", pattern)
+        slice_var = frozen_binning.get("slice_var", slice_var)
+    cfg["naming"] = CategoryNaming(pattern)
+    cfg["slice_var"] = slice_var
+
+    # Both configurations name the pattern, and both carry a comment saying they must
+    # agree -- so check it rather than trust it. A mismatch does not raise on its own:
+    # base() simply fails to take the datacard config's names apart, every slice becomes
+    # its own base category, and the shapes come out under names the datacard step will
+    # not find.
+    config_pattern = cfg.get("category_pattern")
+    if config_pattern is not None and config_pattern != cfg["naming"].pattern:
+        raise RuntimeError(
+            f"category_pattern mismatch: the datacard configuration {config_path} says "
+            f"'{config_pattern}', this binning says '{cfg['naming'].pattern}'. They name "
+            "the same categories from the two ends and have to be identical."
+        )
+    # The datacard configuration lists the sliced names this script *writes*
+    # ("SR/res2b_dnn0"); the 2D input it *reads* is keyed by the base categories those
+    # slices are cut from ("SR/res2b"). Recover them with the same pattern that names
+    # them, so the two ends cannot disagree about which is which. A configuration that
+    # lists base names already is unchanged by this -- base() returns an unsliced name
+    # as-is.
+    cfg["categories"] = list(
+        dict.fromkeys(cfg["naming"].base(c) for c in cfg["categories"])
+    )
+    model = cfg["model"]
+
+    # A group era is built from its members; a plain era is built from itself.
+    source_eras = cfg["era_groups"].get(era, [era])
+    if era in cfg["era_groups"]:
+        print(f"{era} is a group of {source_eras}: binning on their summed statistics")
+    else:
+        print(f"{era} is a standalone era: binning on its own statistics")
+
+    record = {
+        "slice_var": knobs["slice_var"],
+        "category_pattern": cfg["naming"].pattern,
+        "knobs": {k: v for k, v in sorted(knobs.items())},
+        "binning": {},
+    }
+    by_mass = record["binning"].setdefault(era, {})
+
+    for mass in cfg["mass_values"]:
+        # One handle per source era, used both to discover the edges and to write the
+        # shapes -- so the binning is derived from exactly the statistics it is applied to.
+        sources = []
+        for src in source_eras:
+            in_file = open_input_file(
+                input_dir, model, src, mass, cfg["signal_param_name"]
+            )
+            # getInputFileName() yields "<src>/<variable>/<variable>.root", which is
+            # the layout input_file_pattern resolves against. --output is one era's own
+            # directory, so the era being produced is not repeated inside it.
+            out_path = os.path.join(
+                output_dir,
+                model.getInputFileName(src, {cfg["signal_param_name"]: mass}),
+            )
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            sources.append((src, in_file, ROOT.TFile.Open(out_path, "RECREATE")))
+        discovery_files = [f for _, f, _ in sources]
+
+        print(
+            f"Rebinning {era} {cfg['signal_param_name']}={mass} from "
+            f"{len(sources)} source era(s) -> "
+            f"{os.path.join(output_dir, era)}"
+        )
+        by_channel = by_mass.setdefault(str(mass), {})
+        for channel in cfg["channels"]:
+            for category in cfg["categories"]:
+                frozen = None
+                if frozen_binning is not None:
+                    frozen = lookup_frozen(frozen_binning, era, mass, channel, category)
+                used = process_category(
+                    sources,
+                    channel,
+                    category,
+                    cfg,
+                    mass,
+                    era,
+                    discovery_files,
+                    knobs,
+                    frozen=frozen,
+                    replaying=frozen_binning is not None,
+                )
+                if used is not None:
+                    by_channel.setdefault(channel, {})[category] = used
+
+        for _, in_file, out_file in sources:
+            out_file.Close()
+            in_file.Close()
+
+    # Written beside the shapes it describes, in the same output as them: the binning is
+    # a product of this run, not configuration, so it travels with what it produced and a
+    # reader never has to work out which binning a set of shapes came from.
+    if not any(
+        by_ch for by_mass_ in record["binning"].values() for by_ch in by_mass_.values()
+    ):
+        raise RuntimeError(
+            f"{era}: every channel/category was skipped, so no shapes were written and "
+            "the binning record is empty. The [skip] lines above say why -- usually the "
+            "signal is below min_signal, or a background is missing from a discovery "
+            "era. Exiting 0 here would hand the datacard step an empty input."
+        )
+
+    os.makedirs(output_dir, exist_ok=True)
+    json_path = os.path.join(output_dir, BINNING_JSON)
+    with open(json_path, "w") as f:
+        json.dump(record, f, indent=2, sort_keys=True)
+    print(f"Wrote {json_path}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Rebin 2D histograms into significance-sliced 1D shapes.\n\n"
+        "A standalone pre-step, not part of the datacard chain: it writes a "
+        "'<era>/<variable>/<variable>.root' tree in the same layout HistMergerTask "
+        "produces, so a production of these is consumed by pointing the chain's "
+        "--hists-version at it. It also writes " + BINNING_JSON + ", which --binning "
+        "replays to reproduce a binning instead of re-deriving one.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--input",
+        required=True,
+        type=str,
+        help="base directory containing <era>/<var>/<var>.root",
+    )
+    parser.add_argument(
+        "--output",
+        required=True,
+        type=str,
+        help="output base directory, mirrors --input layout",
+    )
+    parser.add_argument(
+        "--config", required=True, type=str, help="datacard configuration yaml"
+    )
+    parser.add_argument(
+        "--binning-config",
+        required=False,
+        type=str,
+        default=None,
+        help="binning yaml holding the knobs below; anything it does not set takes the "
+        "built-in default, and an explicit flag overrides both",
+    )
+    parser.add_argument(
+        "--binning",
+        required=False,
+        type=str,
+        default=None,
+        help=f"a previous run's {BINNING_JSON}. Given one, the recorded edges are applied "
+        "as-is and nothing is optimised -- this is how a binning is frozen and a "
+        "production reproduced. The knobs are then unused",
+    )
+    parser.add_argument(
+        "--era",
+        required=True,
+        type=str,
+        help="the era of the datacard configuration's `eras:` list to produce. A plain "
+        "era is binned on its own statistics; an era that is a key of `era_groups:` is "
+        "binned on its members' summed statistics and its shapes are that sum. Each is "
+        "written under its own era name, since a combination supports finer bins than "
+        "any single era and the two must not overwrite each other",
+    )
+
+    # Knob overrides. All default to None so that "not given" is distinguishable from
+    # "given the same value as the default", which is what lets --binning-config win.
+    knob_args = {
+        "n_slices": (int, "fixed number of slices per category (same for every mass)"),
+        "category_pattern": (
+            str,
+            "pattern naming the sliced categories, e.g. "
+            "'{base_category}_dnn{slice_idx}'; must use both {base_category} and "
+            "{slice_idx}, and the datacard configuration reading these shapes must "
+            "declare the same one",
+        ),
+        "slice_var": (
+            str,
+            "name of the sliced axis, used to label each slice directory with the "
+            "selection it stands for (e.g. 'DNN' -> '0.80 < DNN < 1.00')",
+        ),
+        "max_bins_per_slice": (int, "bins to aim for inside each slice"),
+        "min_slice_bkg_sum": (
+            float,
+            "minimum summed-background yield required in a slice",
+        ),
+        "min_slice_bkg_neff": (
+            float,
+            "minimum effective MC entries of the summed background for a slice boundary "
+            "to be selectable",
+        ),
+        "min_slice_bkg_each": (
+            float,
+            "minimum yield required of every non-negligible background in a slice",
+        ),
+        "min_slice_bkg_each_neff": (
+            float,
+            "minimum effective MC entries of every non-negligible background in a slice; "
+            "much stronger than the yield floor and correspondingly expensive",
+        ),
+        "min_bin_bkg_each": (
+            float,
+            "minimum yield required of every non-negligible background in a bin",
+        ),
+        "min_bin_bkg_neff": (
+            float,
+            "minimum effective MC entries of the summed background in a bin",
+        ),
+        "bkg_per_bin": (
+            float,
+            "summed background to aim for per bin; overrides max_bins_per_slice when it "
+            "binds",
+        ),
+        "min_bkg_frac": (
+            float,
+            "backgrounds below this fraction of the category total are exempt from the "
+            "per-background floors, so a negligible process cannot veto every boundary",
+        ),
+        "min_signal": (float, "minimum signal integral for a category to be rebinned"),
+    }
+    for name, (typ, help_text) in knob_args.items():
+        parser.add_argument(
+            f"--{name.replace('_', '-')}",
+            required=False,
+            type=typ,
+            default=None,
+            help=help_text,
+        )
+    parser.add_argument(
+        "--significance-mode",
+        required=False,
+        type=str,
+        default=None,
+        choices=list(SIGNIFICANCE_MODES),
+        help="figure of merit for slice boundaries: 'sb' = S/sqrt(B+sigmaB^2), "
+        "'asimov' = Poisson-correct Asimov significance (valid at low B)",
+    )
+    args = parser.parse_args()
+
+    overrides = {name: getattr(args, name) for name in knob_args}
+    overrides["significance_mode"] = args.significance_mode
+    knobs = load_binning_config(args.binning_config, overrides)
+
+    frozen_binning = None
+    if args.binning:
+        with open(args.binning, "r") as f:
+            frozen_binning = json.load(f)
+        print(f"Replaying the binning recorded in {args.binning}; not optimising")
+
+    run(
+        args.input,
+        args.output,
+        args.config,
+        args.era,
+        knobs,
+        frozen_binning=frozen_binning,
+    )
