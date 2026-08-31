@@ -73,9 +73,15 @@ class DhiPlotMixin:
         for key, value in spec.items():
             flag = "--" + key.replace("_", "-")
             if isinstance(value, bool):
-                # luigi bool parameters are set by presence, not by value
-                if value:
-                    cmd.append(flag)
+                # Passed as "--flag True", never as a bare "--flag". law sets
+                # luigi.BoolParameter.parsing to EXPLICIT_PARSING globally on import
+                # (law/parameter.py), which drops argparse's store_true and leaves
+                # nargs="?" -- so a bare flag parses to None, luigi falls back to the
+                # parameter's default, and the setting is silently lost. "y_log: true"
+                # in a plot_params block drew a linear axis for exactly that reason,
+                # while plot_targets built the task with y_log=True, so the path this
+                # looked the plot up under was not the path it was drawn to.
+                cmd += [flag, str(value)]
             elif key == "multi_datacards":
                 # colon between datacard sequences, comma within one
                 cmd += [flag, ":".join(",".join(seq) for seq in value)]
