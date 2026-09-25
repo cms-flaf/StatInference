@@ -70,13 +70,16 @@ class DatacardMaker:
         self.naming = CategoryNaming.fromConfig(cfg)
         self.categories = list(cfg["categories"])
         # Where each category's shapes sit in the input, when that depends on the model
-        # point; see InputCategories.
+        # point; see InputCategories. Checked against the categories as the configuration
+        # writes them, not self.categories: once a category list is expanded against a
+        # rebinning record (base "SR/res2b" -> "SR/res2b_hmebox0"), the map's keys -- the
+        # configured names -- no longer appear in it, and every key would read as unknown.
         self.input_categories = InputCategories.fromConfig(cfg)
-        unknown = self.input_categories.unknown(self.categories)
+        unknown = self.input_categories.unknown(cfg["categories"])
         if unknown:
             raise RuntimeError(
                 f"input_categories maps {unknown}, which are not configured categories "
-                f"({self.categories})"
+                f"({list(cfg['categories'])})"
             )
         self.signalFractionForRelevantBins = cfg["signalFractionForRelevantBins"]
 
