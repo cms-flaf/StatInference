@@ -1,7 +1,10 @@
 import array
 import json
+import math
 import os
 import sys
+
+import numpy as np
 import yaml
 
 if __name__ == "__main__":
@@ -38,6 +41,14 @@ from StatInference.common.binning_core import (
     open_input_file,
     sum_hists,
 )
+from StatInference.common.binning_dp import (
+    binning_objective,
+    build_cells,
+    box_tables,
+    check_box_mask,
+    partition_dp,
+    trim_by_marginal_gain,
+)
 
 ROOT = importROOT()
 
@@ -64,7 +75,33 @@ BINNING_DEFAULTS = {
     "min_bkg_frac": 0.05,
     "min_signal": 0.5,
     "significance_mode": "asimov",
+    # How the edges are found. "greedy" is the original: each slice boundary is the best
+    # one taken on its own, and the mass bins inside a slice are equal-signal quantiles
+    # merged until the gates pass. "hme_box" does the reverse: one HME window per
+    # category, with the DNN binned inside it by an exact partition search -- see
+    # _discover_hme_box(). Default stays "greedy" so adding this moves nothing until a
+    # configuration asks for it.
+    "strategy": "greedy",
+    # hme_box only: a bin must earn its place. The split that creates it has to raise
+    # this category's Z^2 by at least this fraction of the category's own achievable
+    # total, or it is given back. 0.0 leaves the count to max_bins_per_slice alone.
+    "dp_min_bin_gain": 0.0,
+    # hme_box only: the search grid for the box edges. A full scan is ny(ny+1)/2 windows
+    # and every one of them carries its own dynamic program over the binned axis, so the
+    # edges are scanned on a stride and then refined within +-box_refine of the winner.
+    "box_stride": 6,
+    "box_refine": 5,
+    # hme_box only: the box is searched only where the signal is. A window that starts
+    # beyond the resonance adds background and no signal; scanning it is wasted time, and
+    # including it in the grid costs resolution where the answer actually lies.
+    "box_signal_quantile": 0.001,
 }
+
+# Named here so the yaml path can be checked against the same list the command line's
+# choices= uses -- significance_mode already learned this lesson: it is read by a
+# function that silently treats anything unrecognised as a default, so a typo in the
+# yaml quietly changed the answer instead of failing.
+BINNING_STRATEGIES = ("greedy", "hme_box")
 
 
 def load_binning_config(path, overrides=None):
@@ -95,6 +132,11 @@ def load_binning_config(path, overrides=None):
         raise RuntimeError(
             f"{path or 'binning configuration'}: significance_mode "
             f"'{knobs['significance_mode']}' is not one of {sorted(SIGNIFICANCE_MODES)}."
+        )
+    if knobs["strategy"] not in BINNING_STRATEGIES:
+        raise RuntimeError(
+            f"{path or 'binning configuration'}: strategy '{knobs['strategy']}' is not "
+            f"one of {sorted(BINNING_STRATEGIES)}."
         )
     return knobs
 
@@ -283,22 +325,7 @@ def find_bins(
     )
 
 
-def discover_binning(
-    sig2d,
-    bkg2d_by_name,
-    n_slices,
-    max_bins_per_slice,
-    min_slice_sum,
-    min_bin_each,
-    min_slice_bkg_neff=0.0,
-    min_bkg_frac=0.0,
-    min_bin_bkg_neff=0.0,
-    bkg_per_bin=0.0,
-    sig_mode="sb",
-    min_slice_bkg_each=0.0,
-    min_slice_bkg_each_neff=0.0,
-    min_bin_bkg_each_neff=0.0,
-):
+def _discover_greedy(sig2d, bkg2d_by_name, knobs):
     """bkg2d_by_name: {background_name: [hist per discovery era, ...]}. The list
     is usually a single era's own histogram (standalone limit) or all of a
     meta-era's sub-eras (combined limit) -- see --discovery-eras.
@@ -306,6 +333,19 @@ def discover_binning(
     the same discovery reference's (already-summed) signal histogram: its x
     projection picks the significance-maximizing slice boundaries, and its y
     projection within each slice places the mass bin edges by signal quantile."""
+    n_slices = knobs["n_slices"]
+    max_bins_per_slice = knobs["max_bins_per_slice"]
+    min_slice_sum = knobs["min_slice_bkg_sum"]
+    min_bin_each = knobs["min_bin_bkg_each"]
+    min_slice_bkg_neff = knobs["min_slice_bkg_neff"]
+    min_bkg_frac = knobs["min_bkg_frac"]
+    min_bin_bkg_neff = knobs["min_bin_bkg_neff"]
+    bkg_per_bin = knobs["bkg_per_bin"]
+    sig_mode = knobs["significance_mode"]
+    min_slice_bkg_each = knobs["min_slice_bkg_each"]
+    min_slice_bkg_each_neff = knobs["min_slice_bkg_each_neff"]
+    min_bin_bkg_each_neff = knobs["min_bin_bkg_each_neff"]
+
     any_hist = next(iter(bkg2d_by_name.values()))[0]
     nx = any_hist.GetNbinsX()
     ny = any_hist.GetNbinsY()
@@ -362,6 +402,146 @@ def discover_binning(
     return result
 
 
+def _best_count(values, cap):
+    """The bin count at or below `cap` that actually scores best, or None if none is
+    feasible.
+
+    Not the largest feasible count, which is the obvious choice and the wrong one. With
+    the background uncertainty folded into the figure of merit -- which is what
+    significance() does, and the reason it does not reward a background that fluctuated
+    low -- splitting a bin is no longer guaranteed to raise Z^2: each half carries a
+    larger relative sigma_B, and for a slice that is already statistics-limited the
+    split can cost more than the extra shape information gains. Taking the largest
+    feasible count would then hand back a binning worse than a coarser one that passes
+    the same gates.
+
+    Choosing the argmax instead means every coarser feasible count is one of the
+    candidates, so the winner is at least as good as any of them. It also tends to spend
+    fewer bins than the budget allows, which is the right direction -- an extra bin that
+    buys nothing is pure MC-statistical exposure.
+    """
+    best, best_n = -np.inf, None
+    for n in range(1, min(cap, len(values) - 1) + 1):
+        if values[n] > best:
+            best, best_n = values[n], n
+    return best_n
+
+
+def _box_value(cells, y0, y1, knobs, check=False):
+    """What one HME box is worth: the best 1D binning of the DNN inside it.
+
+    A box is scored by the binning it admits, not by its own integrated significance.
+    Those are different questions and they pick different windows -- scored on its own, a
+    box is rewarded for swallowing as much signal as it can and the DNN shape inside it
+    plays no part, which is the opposite of what the fit will do with it.
+    """
+    mode = knobs["significance_mode"]
+    # which backgrounds count as negligible is decided once, over the whole box -- see
+    # minor_backgrounds() on why it cannot be re-judged inside each candidate bin
+    exempt = cells.exempt(1, cells.nx, y0, y1, knobs["min_bkg_frac"])
+    score, valid = box_tables(cells, y0, y1, exempt, knobs, mode)
+    if check:
+
+        def bin_passes(a, b, ylo, yhi, exempt_set):
+            return _bin_passes(
+                cells.yields(a, b, ylo, yhi),
+                knobs["min_bin_bkg_each"],
+                exempt_set,
+                cells.total_bkg_error(a, b, ylo, yhi),
+                knobs["min_bin_bkg_neff"],
+                cells.errors(a, b, ylo, yhi),
+                knobs["min_bin_bkg_each_neff"],
+            )
+
+        check_box_mask(
+            cells,
+            y0,
+            y1,
+            valid,
+            score,
+            exempt,
+            bin_passes,
+            mode,
+        )
+    values, partitions = partition_dp(score, valid, knobs["max_bins_per_slice"])
+    n = _best_count(values, knobs["max_bins_per_slice"])
+    if n is None:
+        return float("-inf"), None
+    if knobs["dp_min_bin_gain"] > 0 and values[n] > 0:
+        n = trim_by_marginal_gain([values], [n], knobs["dp_min_bin_gain"] * values[n])[
+            0
+        ]
+    return values[n], [(a + 1, b + 1) for a, b in partitions[n]]
+
+
+def _discover_hme_box(sig2d, bkg2d_by_name, knobs):
+    """One HME window per category, with the DNN binned inside it.
+
+    The greedy strategy cuts the DNN into slices that each become a datacard category and
+    gives every slice a shape along HME. This one does the reverse and keeps only one
+    category: a single contiguous HME box around the resonance, and a 1D DNN distribution
+    inside it. Everything outside the box is dropped -- that is what makes it a cut rather
+    than a slice, and it is why the box has to earn its acceptance loss in purity.
+
+    Box and binning are chosen together; see _box_value.
+    """
+    cells = build_cells(sig2d, bkg2d_by_name)
+    ny = cells.ny
+    # where the signal actually is -- see box_signal_quantile
+    cumulative = np.array(
+        [cells.signal(0, cells.nx + 1, 1, j) for j in range(1, ny + 1)]
+    )
+    total = cumulative[-1] if len(cumulative) else 0.0
+    if total <= 0:
+        return None
+    q = knobs["box_signal_quantile"]
+    lo_edge = max(1, int(np.searchsorted(cumulative, q * total)))
+    hi_edge = min(ny, int(np.searchsorted(cumulative, (1.0 - q) * total)) + 1)
+
+    best_value, best_box = float("-inf"), None
+    stride = max(1, int(knobs["box_stride"]))
+    for a in range(lo_edge, hi_edge + 1, stride):
+        for b in range(a, hi_edge + 1, stride):
+            value, _ = _box_value(cells, a, b, knobs)
+            if value > best_value:
+                best_value, best_box = value, (a, b)
+    if best_box is None:
+        return None
+    refine = max(0, int(knobs["box_refine"]))
+    a0, b0 = best_box
+    for a in range(max(lo_edge, a0 - refine), min(hi_edge, a0 + refine) + 1):
+        for b in range(max(a, b0 - refine), min(hi_edge, b0 + refine) + 1):
+            value, _ = _box_value(cells, a, b, knobs)
+            if value > best_value:
+                best_value, best_box = value, (a, b)
+
+    y0, y1 = best_box
+    value, bins = _box_value(cells, y0, y1, knobs, check=True)
+    if bins is None:
+        return None
+    # A box touching an end of the axis takes that end's overflow with it: the events are
+    # inside the selection the box stands for, and dropping them would make the written
+    # yield disagree with the cut the category claims to be.
+    y0 = 0 if y0 <= 1 else y0
+    y1 = ny + 1 if y1 >= ny else y1
+    return [{"y_range": (y0, y1), "x_ranges": bins}]
+
+
+def discover_binning(sig2d, bkg2d_by_name, knobs):
+    """Find this category's binning, by whichever strategy the configuration names.
+
+    bkg2d_by_name: {background_name: [hist per discovery era, ...]}. The list is usually
+    a single era's own histogram (standalone limit) or all of a meta-era's sub-eras
+    (combined limit). Yields are summed across whatever is in the list; see _bkg_yields().
+    sig2d is the same discovery reference's already-summed signal histogram.
+
+    Returns None when the category cannot be binned, which the caller reports as a skip.
+    """
+    if knobs["strategy"] == "hme_box":
+        return _discover_hme_box(sig2d, bkg2d_by_name, knobs)
+    return _discover_greedy(sig2d, bkg2d_by_name, knobs)
+
+
 def mkdir_titled(directory, path, title):
     """mkdir a nested path, putting `title` on the leaf directory only.
 
@@ -397,7 +577,7 @@ def format_var_range(lo, hi, var):
     return f"{lo:.2f} < {var} < {hi:.2f}"
 
 
-def slice_ranges(x_axis, slices):
+def slice_ranges(x_axis, y_axis, slices):
     """Physical edges of the discovered slices on the sliced axis, as [[lo, hi], ...].
 
     The slice x_ranges are bin indices, and extend_outer_edges() has already pushed the
@@ -406,39 +586,74 @@ def slice_ranges(x_axis, slices):
     the plots can say which selection each slice actually is; nothing downstream of
     the datacards needs it.
     """
-    n = x_axis.GetNbins()
     ranges = []
     for sl in slices:
-        lo, hi = sl["x_range"]
+        (lo, hi), _, slice_axis = slice_parts(sl)
+        axis = x_axis if slice_axis == "x" else y_axis
+        n = axis.GetNbins()
         ranges.append(
             [
-                None if lo < 1 else x_axis.GetBinLowEdge(lo),
-                None if hi > n else x_axis.GetBinUpEdge(hi),
+                None if lo < 1 else axis.GetBinLowEdge(lo),
+                None if hi > n else axis.GetBinUpEdge(hi),
             ]
         )
     return ranges
 
 
-def slices_to_record(slices, x_axis, y_axis):
+def _slice_record(sl, sel_edges, x_axis, y_axis):
+    """One category as plain data, in whichever layout produced it.
+
+    The key names say which axis is the selection and which carries the bins, so a reader
+    -- human or replay -- never has to infer it from the strategy that happened to run.
+    """
+    (lo, hi), bins, slice_axis = slice_parts(sl)
+    binned_axis = y_axis if slice_axis == "x" else x_axis
+    sel_key, bin_key = (
+        ("x_range", "y_ranges")
+        if slice_axis == "x"
+        else (
+            "y_range",
+            "x_ranges",
+        )
+    )
+    return {
+        sel_key: [lo, hi],
+        f"{slice_axis}_edges": sel_edges,
+        bin_key: [list(r) for r in bins],
+        ("y_edges" if slice_axis == "x" else "x_edges"): bin_edges(binned_axis, bins),
+    }
+
+
+def slices_to_record(slices, x_axis, y_axis, objective=None):
     """The discovered structure as plain data, for binning.json.
 
     Both forms are written. The bin index ranges are what the code actually cuts on and
     are what a replay restores; the physical edges alongside them are what a human reads,
     and what makes the record meaningful next to a plot.
+
+    `objective` is what the binning scored, recomputed from these ranges rather than
+    carried out of the optimiser -- so it is filled in for the greedy strategy too, which
+    never computes it, and two runs can be compared from their records alone. It is
+    written as a sibling of the slices and never read back: record_to_slices() takes only
+    the ranges, so a record written before this existed still replays.
     """
-    return {
+    record = {
         "n_x_bins": x_axis.GetNbins(),
         "n_y_bins": y_axis.GetNbins(),
         "slices": [
-            {
-                "x_range": list(sl["x_range"]),
-                "x_edges": x_edges,
-                "y_ranges": [list(r) for r in sl["y_ranges"]],
-                "y_edges": bin_edges(y_axis, sl["y_ranges"]),
-            }
-            for sl, x_edges in zip(slices, slice_ranges(x_axis, slices))
+            _slice_record(sl, sel_edges, x_axis, y_axis)
+            for sl, sel_edges in zip(slices, slice_ranges(x_axis, y_axis, slices))
         ],
     }
+    if objective is not None:
+        total, per_slice = objective
+        record["objective"] = {
+            "z": math.sqrt(max(total, 0.0)),
+            "z2": total,
+            "z2_per_slice": per_slice,
+            "n_bins": sum(len(slice_parts(sl)[1]) for sl in slices),
+        }
+    return record
 
 
 def record_to_slices(record, x_axis, y_axis, where):
@@ -460,12 +675,33 @@ def record_to_slices(record, x_axis, y_axis, where):
                 "to this input."
             )
     return [
-        {
-            "x_range": tuple(sl["x_range"]),
-            "y_ranges": [tuple(r) for r in sl["y_ranges"]],
-        }
+        (
+            {
+                "y_range": tuple(sl["y_range"]),
+                "x_ranges": [tuple(r) for r in sl["x_ranges"]],
+            }
+            if "y_range" in sl
+            else {
+                "x_range": tuple(sl["x_range"]),
+                "y_ranges": [tuple(r) for r in sl["y_ranges"]],
+            }
+        )
         for sl in record["slices"]
     ]
+
+
+def slice_parts(sl):
+    """(selection range, bin ranges, which axis the selection is on) for one category.
+
+    Two layouts reach this point. The DNN-sliced strategy cuts x into categories and gives
+    each a shape along y: {"x_range", "y_ranges"}. The HME-box strategy cuts y and gives
+    the one category a shape along x: {"y_range", "x_ranges"}. Everything downstream --
+    the writer, the record, the objective -- needs the same three things from either, and
+    asking here is what keeps that code from having to know which strategy ran.
+    """
+    if "y_range" in sl:
+        return sl["y_range"], sl["x_ranges"], "y"
+    return sl["x_range"], sl["y_ranges"], "x"
 
 
 def rebin_hist_2d(hist2d, slices, name, naming):
@@ -473,17 +709,18 @@ def rebin_hist_2d(hist2d, slices, name, naming):
     for this specific histogram (nominal or a systematic variation)."""
     outputs = []
     for slice_idx, sl in enumerate(slices):
-        xlo, xhi = sl["x_range"]
+        (sel_lo, sel_hi), bin_ranges, slice_axis = slice_parts(sl)
         # ROOT reinterprets an inverted or negative range as the full axis including
         # under/overflow, silently and with a plausible-looking positive yield, so an
         # invalid range must never reach IntegralAndError below. Checked here rather
         # than trusted because this is the last point where it is still cheap to say so.
-        if not 0 <= xlo <= xhi:
+        if not 0 <= sel_lo <= sel_hi:
             raise RuntimeError(
-                f"invalid x bin range ({xlo}, {xhi}) for slice {slice_idx} of {name}; "
-                "ROOT would read this as the whole plane."
+                f"invalid {slice_axis} bin range ({sel_lo}, {sel_hi}) for slice "
+                f"{slice_idx} of {name}; ROOT would read this as the whole plane."
             )
-        edges = array.array("d", bin_edges(hist2d.GetYaxis(), sl["y_ranges"]))
+        binned_axis = hist2d.GetYaxis() if slice_axis == "x" else hist2d.GetXaxis()
+        edges = array.array("d", bin_edges(binned_axis, bin_ranges))
         # Detached for the same reason as the projections above: Write() targets
         # gDirectory regardless, so nothing needs these to stay attached.
         h = _detach(
@@ -494,9 +731,14 @@ def rebin_hist_2d(hist2d, slices, name, naming):
                 edges,
             )
         )
-        for bin_idx, (ylo, yhi) in enumerate(sl["y_ranges"], start=1):
+        for bin_idx, (blo, bhi) in enumerate(bin_ranges, start=1):
             err = array.array("d", [0.0])
-            content = hist2d.IntegralAndError(xlo, xhi, ylo, yhi, err)
+            # the selection is on one axis and the bin on the other; IntegralAndError
+            # always wants (x_lo, x_hi, y_lo, y_hi)
+            if slice_axis == "x":
+                content = hist2d.IntegralAndError(sel_lo, sel_hi, blo, bhi, err)
+            else:
+                content = hist2d.IntegralAndError(blo, bhi, sel_lo, sel_hi, err)
             h.SetBinContent(bin_idx, content)
             h.SetBinError(bin_idx, err[0])
         outputs.append(h)
@@ -601,22 +843,7 @@ def process_category(
             frozen, disc_sig.GetXaxis(), disc_sig.GetYaxis(), where
         )
     else:
-        slices = discover_binning(
-            disc_sig,
-            disc_bkg_by_name,
-            knobs["n_slices"],
-            knobs["max_bins_per_slice"],
-            knobs["min_slice_bkg_sum"],
-            knobs["min_bin_bkg_each"],
-            knobs["min_slice_bkg_neff"],
-            knobs["min_bkg_frac"],
-            knobs["min_bin_bkg_neff"],
-            knobs["bkg_per_bin"],
-            knobs["significance_mode"],
-            knobs["min_slice_bkg_each"],
-            knobs["min_slice_bkg_each_neff"],
-            knobs["min_bin_bkg_each_neff"],
-        )
+        slices = discover_binning(disc_sig, disc_bkg_by_name, knobs)
         if slices is None:
             print(
                 f"    [skip] {channel}/{category} {param_name}={mass}: the "
@@ -632,7 +859,7 @@ def process_category(
     # side-car path to hand a reader correctly and no key name for the two ends to agree
     # on -- anything that can open the shapes can already read it.
     naming = cfg["naming"]
-    ranges = slice_ranges(disc_sig.GetXaxis(), slices)
+    ranges = slice_ranges(disc_sig.GetXaxis(), disc_sig.GetYaxis(), slices)
 
     # One shared set of edges, applied to every source era in its own file.
     for source_era, in_file, out_file in sources:
@@ -654,7 +881,21 @@ def process_category(
                 out_file.cd(f"{channel}/{naming.name(category, slice_idx)}")
                 h.Write(key)
 
-    return slices_to_record(slices, disc_sig.GetXaxis(), disc_sig.GetYaxis())
+    # Scored from the ranges that were just written, for both strategies and for a replay
+    # alike, so the number in the record always describes the shapes beside it. Cheap
+    # next to the search, and the greedy path has no other way to report what it achieved.
+    # Only when there is something to score. A replay is allowed to proceed with a
+    # background missing from the input -- it applies recorded edges and asks no
+    # questions -- and a figure of merit computed against no background would be a
+    # number, but not a true one.
+    objective = (
+        binning_objective(
+            build_cells(disc_sig, disc_bkg_by_name), slices, knobs["significance_mode"]
+        )
+        if disc_bkg_by_name
+        else None
+    )
+    return slices_to_record(slices, disc_sig.GetXaxis(), disc_sig.GetYaxis(), objective)
 
 
 def run(
@@ -926,6 +1167,16 @@ if __name__ == "__main__":
             help=help_text,
         )
     parser.add_argument(
+        "--strategy",
+        required=False,
+        type=str,
+        default=None,
+        choices=list(BINNING_STRATEGIES),
+        help="how the edges are found: 'greedy' = each slice boundary taken on its own "
+        "and equal-signal quantiles inside it, 'hme_box' = one HME window per category "
+        "with the DNN binned inside it by an exact partition search",
+    )
+    parser.add_argument(
         "--significance-mode",
         required=False,
         type=str,
@@ -938,6 +1189,7 @@ if __name__ == "__main__":
 
     overrides = {name: getattr(args, name) for name in knob_args}
     overrides["significance_mode"] = args.significance_mode
+    overrides["strategy"] = args.strategy
     knobs = load_binning_config(args.binning_config, overrides)
 
     frozen_binning = None
