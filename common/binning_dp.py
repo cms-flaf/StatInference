@@ -1,43 +1,21 @@
-"""Prefix-sum cells over a 2D shape, so any candidate binning can be scored in O(1).
+"""Prefix-sum tables over a 2D shape, so the window search can score any bin in O(1).
 
-The greedy binner asks its questions one candidate at a time and re-integrates the
-histograms for each, which is affordable because it only ever looks at ~nx windows. The
-window search looks at ~ny^2 windows and runs an exact partition search over ~nx^2
-candidate bins of x inside every one (in the cells' own frame, where the window is on y;
-build_cells transposes the input when the window is on x), so the integrals have to become table lookups or
-the search is not worth running.
-That is all this module does: it turns the TH2s into cumulative arrays and hands back the
-same yields, errors and figure of merit the greedy path would have computed.
+The window search tries ~ny^2 windows, each with an exact partition search over ~nx^2
+candidate bins, which is only affordable with table lookups instead of TH2 integrals.
+The search is written with the window on y; build_cells transposes the input for a
+window on x.
 
-It deliberately knows nothing about what a valid bin is or how a bin is scored. The
-gate (_bin_passes) and the figure of merit (significance) live in the 2D binner and are
-passed in as callables, so there is exactly one definition of each and this module
-cannot drift from it. What it provides is the *arguments* those gates take -- the
-yields and errors dicts -- built from the tables instead of from ROOT.
+The gate (_bin_passes) and the figure of merit (significance) stay in rebin_2d.py and are
+passed in, so each has one definition.
 
-Under- and overflow are carried, and that is load-bearing rather than tidy. _integral()
-in the 2D binner reads a TH2 with Integral(lo, hi, 0, -1), and ROOT reads biny2 < biny1 as
-"the whole y axis including under- and overflow", so every slice-level quantity in the
-greedy path already includes the y under/overflow rows. A table that stopped at bin ny
-would disagree with the greedy path by a fraction of an event, which is easily enough to
-move a boundary and produce a difference nobody can explain. So the arrays are indexed
-0..n+1 throughout, and a slice-level query spans y = 0..ny+1.
-
-Differencing prefix sums is not exact, and one of the ways it is inexact has teeth.
-A window whose content is ~1e8 times smaller than the whole plane's -- routine for DY in
-a narrow window at high y -- loses about eight digits to cancellation, so a quantity that
-is exactly 0.0 in ROOT comes back as -2e-16 here. That is numerically nothing and
-physically nothing, but _bin_passes() tests `value < 0` to reject a background that has
-gone negative, and on the real inputs it rejected 137 sampled windows on the strength
-of a rounding sign. So every yield is snapped to zero below a per-process epsilon scaled
-by that process's own L1 norm, which is the size of the cancellation that can occur. The
-epsilon lands around 1e-8 events for the largest process here, against a magnitude floor
-(min_bin_bkg_each) of 0.01 -- six orders of margin, so the snap cannot mask a real
-negative.
-
-The check that all of this is true is check_window_mask(), not inspection: every
-window the search settles on has a sample of its table entries re-derived with _bin_passes and
-significance on the histograms themselves, and the run stops on any disagreement.
+Notes:
+- Under/overflow are included (arrays are indexed 0..n+1), to match what the TH2
+  integrals in rebin_2d.py return.
+- Differencing prefix sums can turn an exact 0 into -2e-16, which the `value < 0`
+  positivity gate would reject. Yields are snapped to 0 below an epsilon scaled by each
+  process's L1 norm (~1e-8 events, far below the 0.01 floor).
+- check_window_mask() re-checks a sample of every chosen window against _bin_passes and
+  significance on each run.
 """
 
 import math
@@ -46,13 +24,7 @@ import numpy as np
 
 
 def _hist_arrays(hist):
-    """(values, variances) as (nx+2, ny+2) arrays indexed [binx, biny], bins 0..n+1.
-
-    Read through GetBinContent/GetBinError rather than the internal buffer: the buffer
-    is faster but its layout is a ROOT implementation detail, and getting it wrong is
-    silent. This runs once per histogram per category, which is nothing next to the
-    search it feeds.
-    """
+    """(values, variances) as (nx+2, ny+2) arrays indexed [binx, biny], bins 0..n+1."""
     nx = hist.GetNbinsX()
     ny = hist.GetNbinsY()
     values = np.empty((nx + 2, ny + 2), dtype=np.float64)
@@ -75,11 +47,8 @@ def _prefix(a):
 def _cancellation_eps(a, rel=1e-12):
     """How large a value this array's prefix sums can invent out of rounding.
 
-    Scaled by the L1 norm rather than the sum, because the cancellation that matters
-    comes from negative-weight events: a process whose bins nearly cancel has a small
-    sum and a large L1, and it is the L1 that sets how much precision the difference of
-    two prefix sums can lose. rel is a few hundred times the double-precision epsilon,
-    which covers accumulating over the ~1e4 cells of one of these planes.
+    Scaled by the L1 norm, not the sum: with negative weights a process can nearly cancel
+    to a small sum while its prefix sums still lose precision on the L1 scale.
     """
     return rel * float(np.abs(a).sum())
 
@@ -97,9 +66,8 @@ def _rect(p, x0, x1, y0, y1):
 class Cells:
     """Every quantity the binning gates and the figure of merit need, as O(1) lookups.
 
-    Background yields are summed across discovery eras and their MC errors added in
-    quadrature, which is what _bkg_yields()/_bkg_errors() do -- the eras are summed
-    because the binning is derived from the combination it will be applied to.
+    Backgrounds are summed across discovery eras (errors in quadrature), as
+    _bkg_yields()/_bkg_errors() do.
     """
 
     def __init__(self, nx, ny, sig, bkg, var, significance):
@@ -110,10 +78,7 @@ class Cells:
         self._sig = _prefix(sig)
         self._bkg = {name: _prefix(bkg[name]) for name in self.names}
         self._var = {name: _prefix(var[name]) for name in self.names}
-        # An empty background dict is reachable -- a replay whose input is missing a
-        # process it was derived with -- and sum() of nothing is the integer 0, which is
-        # not an array. Zeros keep every query defined and answering zero, which is the
-        # truthful answer when there is no background to integrate.
+        # no backgrounds at all is possible (a replay whose input lacks them); keep arrays
         zero = np.zeros_like(sig)
         bkg_tot = sum(bkg.values()) if bkg else zero
         var_tot = sum(var.values()) if var else zero
@@ -149,22 +114,15 @@ class Cells:
         }
 
     def score(self, x0, x1, y0, y1, mode):
-        """The figure of merit for one cell, squared.
-
-        Squared because Asimov Z^2 is what adds across independent counting bins, so a
-        partition's value is the sum of its cells' scores and the search can be a
-        dynamic program. `significance` is the 2D binner's own, passed in, so the cells
-        are ranked by exactly the quantity the greedy path maximises.
-        """
+        """significance()^2 for one rectangle; Z^2 adds across bins, so a partition's
+        value is the sum of its bins'."""
         s = self.signal(x0, x1, y0, y1)
         b = self.total_bkg(x0, x1, y0, y1)
         b_err = self.total_bkg_error(x0, x1, y0, y1)
         return self._significance(s, b, b_err, mode) ** 2
 
     def exempt(self, x0, x1, y0, y1, min_frac):
-        """minor_backgrounds() over a rectangle, for the range the caller is about to
-        subdivide -- never for the candidate sub-range itself, which is circular.
-        """
+        """minor_backgrounds() over the rectangle about to be subdivided."""
         if min_frac <= 0:
             return set()
         y = self.yields(x0, x1, y0, y1)
@@ -175,13 +133,10 @@ class Cells:
 
 
 def build_cells(sig2d, bkg2d_by_name, significance, transpose=False):
-    """Cells for one channel/category, from the same histograms discover_binning() reads.
+    """Cells for one channel/category.
 
-    sig2d is the already-summed discovery signal; bkg2d_by_name is
-    {background: [hist per discovery era]}, summed here the way _bkg_yields() sums it.
-
-    transpose swaps the two axes, so the cells' x is the input's y and vice versa. The
-    window search is written with the window on y; this is how it runs on x instead.
+    sig2d is the summed discovery signal; bkg2d_by_name is {background: [hist per era]}.
+    transpose swaps x and y, which is how the window search runs with the window on x.
     """
     nx = sig2d.GetNbinsX()
     ny = sig2d.GetNbinsY()
@@ -211,24 +166,12 @@ NEG = -np.inf
 def partition_dp(score, valid, max_parts):
     """Best partition of [0..n-1] into exactly k contiguous valid ranges, for every k.
 
-    Returns (values, partitions): values[k] is the total score of the best k-part
-    partition, or -inf if there is none, and partitions[k] is that partition as a list of
-    (lo, hi) index pairs. Index 0 is unused in both so that k reads as the part count.
+    Returns (values, partitions): values[k] is the best k-part total score (-inf if none)
+    and partitions[k] its (lo, hi) index pairs; index 0 is unused. Every k is returned
+    because the bin count is chosen from the whole curve.
 
-    Every k is returned rather than just the requested one, because the caller needs the
-    whole curve and it costs nothing to keep: the bin count is chosen by comparing what
-    the partition scores at each count, and trim_by_marginal_gain() gives a bin back by
-    comparing values[k] against values[k-1]. Computing them one at a time would re-run the
-    same DP.
-
-    Exact, not greedy. The score is additive over the parts -- Asimov Z^2 is what adds
-    across independent counting bins -- so the optimal k-part partition of a prefix is
-    built from an optimal (k-1)-part partition of a shorter prefix, and the usual
-    interval DP applies. O(max_parts * n^2).
-
-    `valid` is a mask, not a penalty: an invalid range is unreachable rather than merely
-    expensive, so a partition containing one cannot be returned at any score. That is what
-    keeps the background gates hard constraints instead of preferences.
+    Exact interval DP, O(max_parts * n^2), valid because the score is additive over parts.
+    Invalid ranges are excluded outright, so the background gates are hard constraints.
     """
     n = score.shape[0]
     max_parts = max(1, min(max_parts, n))
@@ -263,17 +206,9 @@ def partition_dp(score, valid, max_parts):
 
 
 def binning_objective(cells, slices, mode):
-    """(total Z^2, per-slice Z^2) for a finished binning.
+    """(total Z^2, per-slice Z^2) of a finished binning, from the recorded ranges.
 
-    The quantity the search maximises, recomputed from the binning that was actually
-    written rather than carried out of the optimiser. That makes it meaningful for the
-    greedy strategy too -- which never computes it -- so the two can be compared from
-    their binning.json alone, and it means a discrepancy between what the optimiser
-    thought it achieved and what the shapes contain shows up as a discrepancy rather
-    than going unnoticed.
-
-    Note this is evaluated on the ranges as recorded, i.e. after extend_outer_edges has
-    pushed the outermost ones into under/overflow, so it describes the shapes on disk.
+    Computed for every strategy, so binnings can be compared from binning.json alone.
     """
     per_slice = []
     for sl in slices:
@@ -291,18 +226,10 @@ def binning_objective(cells, slices, mode):
 
 
 def _ranges_from_column(column, n, include_outer=False):
-    """M[i, j] = the rectangle sum for bins (i+1)..(j+1), from one column of a prefix sum.
+    """M[i, j] = the sum over bins (i+1)..(j+1), from one column of a prefix sum.
 
-    For a fixed x window, P[x1+1, :] - P[x0, :] is the running sum along y, and every
-    y range is a difference of two of its entries -- so the whole (n, n) table of
-    candidate ranges is one outer subtraction rather than n^2 lookups.
-
-    With include_outer the first and last bins swallow the under- and overflow, which is
-    what extend_outer_edges() does to the outermost ranges before they are written. A
-    search that scores the ranges without them is optimising something slightly different
-    from what ends up in the datacard -- 0.11% of the background on the DNN axis of the
-    HH->bbWW shapes, small but not nothing, and concentrated entirely in the two
-    outermost slices.
+    The whole (n, n) table of candidate ranges is one outer subtraction. With
+    include_outer the first and last bins also take the under/overflow.
     """
     lo = column[1 : n + 1].copy()
     hi = column[2 : n + 2].copy()
@@ -313,14 +240,8 @@ def _ranges_from_column(column, n, include_outer=False):
 
 
 def _neff_matrix(value, error):
-    """effective_entries() over arrays, with its two degenerate cases kept.
-
-    error <= 0 means the yield carries no MC uncertainty at all: infinite effective
-    entries if there is something there, none if there is not. Taking (v/e)^2 blindly
-    would make the first case a division by zero and the second a nan, and a nan
-    compares false against every threshold -- which would silently reject exactly the
-    empty bins the scalar gate accepts.
-    """
+    """effective_entries() over arrays. error <= 0 gives inf if value > 0, else 0, as
+    the scalar does (a nan would silently fail every threshold)."""
     with np.errstate(divide="ignore", invalid="ignore"):
         ratio = np.where(error > 0, value / np.where(error > 0, error, 1.0), 0.0) ** 2
     degenerate = np.where(value > 0, np.inf, 0.0)
@@ -356,21 +277,11 @@ def _sb_z2_matrix(s, b, b_err):
 
 
 def trim_by_marginal_gain(values_per_slice, counts, threshold):
-    """Give back every bin whose last split bought less than `threshold`.
+    """Give back every bin whose split raised Z^2 by less than `threshold`.
 
-    With Z^2 very nearly monotone in bin count, a search told only to maximise it will
-    always spend whatever it is given. So the binding constraint has to be the value of a
-    bin, not the size of a pot. A bin is kept only if the split that created it raised
-    this category's Z^2 by at least `threshold` -- expressed as a fraction of the
-    category's own achievable total, so it means "worth something on the scale that
-    matters here" rather than a yield in events. A bin that buys nothing is
-    MC-statistical exposure bought for nothing; this is what declines it.
-
-    Stepping down one bin at a time and stopping at the first marginal gain that clears
-    the threshold is exact for a concave curve, which Z^2 in bin count is: each extra
-    split has less left to separate. It is not assumed -- a curve that is not concave
-    simply stops at its first qualifying step, which is still a count whose last bin paid
-    for itself.
+    Z^2 almost always grows with the bin count, so without this the search would use
+    every bin it is allowed. The caller sets `threshold` as a fraction of the category's
+    total, and the count is stepped down until the last bin pays for itself.
     """
     if threshold <= 0:
         return list(counts)
@@ -392,30 +303,14 @@ def _axis_ranges(prefix, a, b, n, axis, include_outer=False):
 
 
 def window_tables(cells, y0, y1, exempt, knobs, mode):
-    """(score, valid) over every candidate bin of the *sliced-on-y* layout.
+    """(score, valid) for every candidate x bin inside the window y0..y1.
 
-    The window is a cut on the cells' y around the signal, and the bins run along their
-    x (build_cells transposes the input when the window is on x). The gates are
-    _bin_passes() and the figure of merit significance(), as
-    whole-array operations: the scalar path -- building a yields dict and an errors dict
-    per candidate and calling _bin_passes -- costs about 80 microseconds a candidate, and
-    there are nx(nx+1)/2 of them per window, for every window the search tries.
+    _bin_passes() and significance() restated as array operations: calling them per
+    candidate is far too slow for the search. check_window_mask() guards against the two
+    versions drifting apart.
 
-    This is the one place that restates the gate rather than calling it, which is a real
-    risk: two spellings of the same rule are two rules as soon as one of them is edited.
-    It is contained by check_window_mask(), which re-evaluates the canonical _bin_passes on a
-    random sample of candidates and raises on the first disagreement -- so the fast path
-    is checked against the slow one on real inputs, on every run, rather than at review
-    time.
-
-    The bins tile the whole x axis including its under/overflow, because everything inside
-    the window is kept and binned. The window itself is a selection: what falls outside it is
-    discarded, not swept into an outer bin, which is the difference between a cut and a
-    slice.
-
-    `exempt` is the set of processes excused from the per-bin floors, judged once over
-    the whole window -- see minor_backgrounds(). Positivity is never excused -- see
-    _bin_passes.
+    `exempt` (processes excused from the per-bin floors) is judged once over the whole
+    window. Positivity is never excused.
     """
     nx = cells.nx
     ranges = lambda prefix: _axis_ranges(prefix, y0, y1, nx, "x", True)
@@ -461,21 +356,14 @@ def check_window_mask(
     n_samples=100,
     seed=0,
 ):
-    """The cross-check of window_tables() against the canonical scalar gate.
-
-    Cheap -- a hundred calls against the thousands the tables replace -- and it is what
-    makes the fast path safe to trust: the tables are re-derived on a random sample with
-    _bin_passes and significance(), so if the two spellings of the rule ever disagree
-    about a candidate bin the run stops here instead of quietly producing a different
-    binning.
-    """
+    """Re-derive a random sample of window_tables() with _bin_passes and significance(),
+    and stop the run on any disagreement."""
     nx = cells.nx
     rng = np.random.default_rng(seed)
     for _ in range(n_samples):
         a = int(rng.integers(1, nx + 1))
         b = int(rng.integers(a, nx + 1))
-        # the outermost bins carry the x under/overflow, because window_tables builds them
-        # with include_outer -- the reference has to ask the same question
+        # the outermost bins include the x under/overflow, as in window_tables
         lo = 0 if a == 1 else a
         hi = nx + 1 if b == nx else b
         want = bool(bin_passes(lo, hi, y0, y1, exempt))

@@ -147,10 +147,8 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
     def _surviving_axis(base_dir):
         """Which axis of the 2D input the rebinned shapes are binned along: 0 = x, 1 = y.
 
-        Read off the binning record the preprocess step wrote beside the shapes. A greedy
-        slice, or a window on x, selects on x and bins y; a window on y (a slice with a
-        "y_range") selects on y and bins x. With no record the shapes are the x-sliced kind, whose
-        surviving axis is y -- which is also what this assumed before windows existed.
+        Read from binning.json: a slice with a "y_range" (a window on y) is binned along x,
+        anything else along y. Without a record, y.
         """
         import json
 
@@ -172,13 +170,8 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
     def plot_variable(self, variable, axis=1):
         """The variable whose axis the shapes are binned along, for histograms.yaml.
 
-        For input a 2D->1D rebinning produced, that is one of the two variables of the 2D
-        entry -- histograms.yaml records both as ``var_list: [x, y]``, so the axis
-        metadata the plotter needs is already described and does not have to be restated
-        here. `axis` picks which, from _surviving_axis(): x-sliced shapes keep y, a
-        window on y keeps x. Taking y unconditionally labelled every window panel with the y
-        variable under bins of x (in HH->bbWW, "Deep HME Mass" under DNN-score bins). For
-        input that was always 1D, the variable is its own answer.
+        For 2D->1D rebinned input, the entry of the 2D variable's ``var_list: [x, y]``
+        picked by `axis` (from _surviving_axis()); for 1D input, the variable itself.
         """
         try:
             import FLAF.Common.Setup as Setup

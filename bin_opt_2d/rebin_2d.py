@@ -60,35 +60,23 @@ BINNING_DEFAULTS = {
     "min_bkg_frac": 0.05,
     "min_signal": 0.5,
     "significance_mode": "asimov",
-    # How the edges are found. "greedy" is the original: x is cut into slices, each
-    # boundary the best one taken on its own, and the y bins inside a slice are
-    # equal-signal quantiles merged until the gates pass. "window" keeps one window per
-    # category on window_axis, with the other axis binned inside it by an exact partition
-    # search -- see _discover_window(). Default stays "greedy" so adding this moves nothing
-    # until a configuration asks for it.
+    # "greedy": slice x, equal-signal bins along y. "window": one window per category on
+    # window_axis, the other axis binned inside it by an exact search (_discover_window).
     "strategy": "greedy",
-    # window only: the axis the window is cut on, "y" or "x". The other axis is the one
-    # binned inside it.
+    # window only: the axis the window is cut on, "y" or "x"
     "window_axis": "y",
-    # window only: a bin must earn its place. The split that creates it has to raise
-    # this category's Z^2 by at least this fraction of the category's own achievable
-    # total, or it is given back. 0.0 leaves the count to max_bins_per_slice alone.
+    # window only: a bin is kept only if it raises the category's Z^2 by at least this
+    # fraction of its total (0 = keep up to max_bins_per_slice)
     "dp_min_bin_gain": 0.0,
-    # window only: the search grid for the window edges. A full scan is ny(ny+1)/2 windows
-    # and every one of them carries its own dynamic program over the binned axis, so the
-    # edges are scanned on a stride and then refined within +-window_refine of the winner.
+    # window only: window edges are scanned on this stride, then refined within
+    # +-window_refine of the best
     "window_stride": 6,
     "window_refine": 5,
-    # window only: the window is searched only where the signal is. A window that
-    # starts beyond the signal adds background and no signal; scanning it is wasted time,
-    # and including it in the grid costs resolution where the answer actually lies.
+    # window only: edges are searched between these signal quantiles
     "window_signal_quantile": 0.001,
 }
 
-# Named here so the yaml path can be checked against the same list the command line's
-# choices= uses -- significance_mode already learned this lesson: it is read by a
-# function that silently treats anything unrecognised as a default, so a typo in the
-# yaml quietly changed the answer instead of failing.
+# checked for the yaml as well as by the command line's choices=
 BINNING_STRATEGIES = ("greedy", "window")
 WINDOW_AXES = ("y", "x")
 
@@ -387,7 +375,7 @@ def _slice_passes(
         if effective_entries(total, total_error) < min_neff:
             return False
     for name, value in yields.items():
-        # As in _bin_passes: exemption covers the magnitude floor, never the sign.
+        # exemption covers the magnitude floor, never the sign (see _bin_passes)
         if value < 0:
             return False
         if name in exempt:
@@ -452,26 +440,15 @@ def _bin_passes(
         if effective_entries(total, total_error) < min_neff:
             return False
     for name, value in yields.items():
-        # Positivity is never exemptable. `exempt` exists so a negligible process
-        # cannot veto every candidate split -- it is about the *magnitude* floor, not
-        # about sign. Letting an exempt process go negative does not merely leave an
-        # ugly bin: resolveNegativeBins in dc_make/maker.py rejects a negative bin
-        # that holds >= signalFractionForRelevantBins of the signal *unconditionally*,
-        # ignoring allow_negative_bins_within_error, so the datacard fails to build at
-        # all. Observed at m1000 muMu/SR/recovery_dnn1, where ST was 4.24% of the
-        # slice -- just under min_bkg_frac 0.05, hence exempt -- and came out at
-        # -0.567 +- 0.789, killing the production.
+        # Positivity is never exempt: an exempt process that goes negative in a
+        # signal-relevant bin makes resolveNegativeBins reject the datacard.
         if value < 0:
             return False
         if name in exempt:
             continue
         if value <= min_each:
             return False
-        # Every background must be measured, not merely present: a yield known only
-        # to a few hundred percent is not a background estimate. _slice_passes has
-        # carried this arm for the sliced axis; the mass axis, where essentially all
-        # fit bins live, had no per-process test at all -- only the summed one, which
-        # any single well-measured process satisfies on its own.
+        # each background must be measured, not only the sum
         if min_proc_neff > 0 and errors is not None:
             if effective_entries(value, errors.get(name, 0.0)) < min_proc_neff:
                 return False
@@ -823,22 +800,10 @@ def _discover_greedy(sig2d, bkg2d_by_name, knobs):
 
 
 def _best_count(values, cap):
-    """The bin count at or below `cap` that actually scores best, or None if none is
-    feasible.
+    """The bin count at or below `cap` that scores best, or None if none is feasible.
 
-    Not the largest feasible count, which is the obvious choice and the wrong one. With
-    the background uncertainty folded into the figure of merit -- which is what
-    significance() does, and the reason it does not reward a background that fluctuated
-    low -- splitting a bin is no longer guaranteed to raise Z^2: each half carries a
-    larger relative sigma_B, and for a slice that is already statistics-limited the
-    split can cost more than the extra shape information gains. Taking the largest
-    feasible count would then hand back a binning worse than a coarser one that passes
-    the same gates.
-
-    Choosing the argmax instead means every coarser feasible count is one of the
-    candidates, so the winner is at least as good as any of them. It also tends to spend
-    fewer bins than the budget allows, which is the right direction -- an extra bin that
-    buys nothing is pure MC-statistical exposure.
+    Not simply the largest: with the background error in the figure of merit, an extra
+    split can lower Z^2.
     """
     best, best_n = -np.inf, None
     for n in range(1, min(cap, len(values) - 1) + 1):
@@ -848,19 +813,13 @@ def _best_count(values, cap):
 
 
 def _window_value(cells, y0, y1, knobs, check=False):
-    """What one window is worth: the best 1D binning of the other axis inside it.
+    """(Z^2, bins) of the best binning inside window y0..y1 (in the cells' frame).
 
-    In the cells' own frame the window is always on y and the bins along x;
-    _discover_window builds the cells transposed when window_axis is x.
-
-    A window is scored by the binning it admits, not by its own integrated significance.
-    Those are different questions and they pick different windows -- scored on its own, a
-    window is rewarded for swallowing as much signal as it can and the shape inside it
-    plays no part, which is the opposite of what the fit will do with it.
+    A window is scored by the binning it admits, not by its integrated significance,
+    which would favour windows that swallow signal and ignore the shape.
     """
     mode = knobs["significance_mode"]
-    # which backgrounds count as negligible is decided once, over the whole window -- see
-    # minor_backgrounds() on why it cannot be re-judged inside each candidate bin
+    # negligible backgrounds are judged once, over the whole window
     exempt = cells.exempt(1, cells.nx, y0, y1, knobs["min_bkg_frac"])
     score, valid = window_tables(cells, y0, y1, exempt, knobs, mode)
     if check:
@@ -900,25 +859,16 @@ def _window_value(cells, y0, y1, knobs, check=False):
 def _discover_window(sig2d, bkg2d_by_name, knobs):
     """One window per category on window_axis, with the other axis binned inside it.
 
-    The greedy strategy cuts x into slices that each become a datacard category and gives
-    every slice a shape along y. This one keeps only one category: a single contiguous
-    window around the signal on one axis, and a 1D distribution of the other axis inside
-    it. Everything outside the window is dropped -- that is what makes it a cut rather than
-    a slice, and it is why the window has to earn its acceptance loss in purity. It suits
-    a window axis the signal peaks in (in HH->bbWW, window_axis y is the HME mass and x the
-    DNN score), and it keeps only one region of that axis, so a signal with two separated
-    peaks would lose one.
+    Events outside the window are dropped. Suited to a window axis the signal peaks in
+    (HH->bbWW: HME on y, DNN on x); only one region of it is kept.
 
-    The search below is written with the window on y. For window_axis x the cells are
-    built transposed, so the same search runs, and the result is turned back into the
-    original axes before it is returned.
-
-    Window and binning are chosen together; see _window_value.
+    The search is written with the window on y; for window_axis x the cells are built
+    transposed and the result is mapped back to the input's axes.
     """
     transpose = knobs["window_axis"] == "x"
     cells = build_cells(sig2d, bkg2d_by_name, significance, transpose=transpose)
     ny = cells.ny
-    # where the signal actually is -- see window_signal_quantile
+    # only search where the signal is
     cumulative = np.array(
         [cells.signal(0, cells.nx + 1, 1, j) for j in range(1, ny + 1)]
     )
@@ -950,14 +900,11 @@ def _discover_window(sig2d, bkg2d_by_name, knobs):
     value, bins = _window_value(cells, y0, y1, knobs, check=True)
     if bins is None:
         return None
-    # A window touching an end of the axis takes that end's overflow with it: the events
-    # are inside the selection the window stands for, and dropping them would make the written
-    # yield disagree with the cut the category claims to be.
+    # a window at an end of the axis includes that end's under/overflow
     y0 = 0 if y0 <= 1 else y0
     y1 = ny + 1 if y1 >= ny else y1
     if transpose:
-        # back to the input's axes: the window is on x and the bins run along y, which is
-        # the layout the greedy slices use, so everything downstream already reads it
+        # window on x, bins along y: the same layout as the greedy slices
         return [{"x_range": (y0, y1), "y_ranges": bins}]
     return [{"y_range": (y0, y1), "x_ranges": bins}]
 
@@ -1052,11 +999,7 @@ def slice_ranges(x_axis, y_axis, slices):
 
 
 def _slice_record(sl, sel_edges, x_axis, y_axis):
-    """One category as plain data, in whichever layout produced it.
-
-    The key names say which axis is the selection and which carries the bins, so a reader
-    -- human or replay -- never has to infer it from the strategy that happened to run.
-    """
+    """One category as plain data; the keys say which axis is selected and which binned."""
     (lo, hi), bins, slice_axis = slice_parts(sl)
     binned_axis = y_axis if slice_axis == "x" else x_axis
     sel_key, bin_key = (
@@ -1082,11 +1025,8 @@ def slices_to_record(slices, x_axis, y_axis, objective=None):
     are what a replay restores; the physical edges alongside them are what a human reads,
     and what makes the record meaningful next to a plot.
 
-    `objective` is what the binning scored, recomputed from these ranges rather than
-    carried out of the optimiser -- so it is filled in for the greedy strategy too, which
-    never computes it, and two runs can be compared from their records alone. It is
-    written as a sibling of the slices and never read back: record_to_slices() takes only
-    the ranges, so a record written before this existed still replays.
+    `objective` (the binning's Z^2) is written for information only; replay reads only
+    the ranges.
     """
     record = {
         "n_x_bins": x_axis.GetNbins(),
@@ -1144,12 +1084,8 @@ def record_to_slices(record, x_axis, y_axis, where):
 def slice_parts(sl):
     """(selection range, bin ranges, which axis the selection is on) for one category.
 
-    Two layouts reach this point: a selection on x with a shape along y,
-    {"x_range", "y_ranges"} -- the greedy slices, and a window with window_axis x -- and a
-    selection on y with a shape along x, {"y_range", "x_ranges"} -- a window with
-    window_axis y. Everything downstream --
-    the writer, the record, the objective -- needs the same three things from either, and
-    asking here is what keeps that code from having to know which strategy ran.
+    Layouts: {"x_range", "y_ranges"} (greedy slices, window on x) and
+    {"y_range", "x_ranges"} (window on y).
     """
     if "y_range" in sl:
         return sl["y_range"], sl["x_ranges"], "y"
@@ -1333,13 +1269,8 @@ def process_category(
                 out_file.cd(f"{channel}/{naming.name(category, slice_idx)}")
                 h.Write(key)
 
-    # Scored from the ranges that were just written, for both strategies and for a replay
-    # alike, so the number in the record always describes the shapes beside it. Cheap
-    # next to the search, and the greedy path has no other way to report what it achieved.
-    # Only when there is something to score. A replay is allowed to proceed with a
-    # background missing from the input -- it applies recorded edges and asks no
-    # questions -- and a figure of merit computed against no background would be a
-    # number, but not a true one.
+    # the Z^2 of the written binning, for the record; skipped without backgrounds (a
+    # replay can run on input missing one)
     objective = (
         binning_objective(
             build_cells(disc_sig, disc_bkg_by_name, significance),
