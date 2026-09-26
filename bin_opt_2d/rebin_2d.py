@@ -2,6 +2,7 @@ import array
 import json
 import math
 import os
+import re
 import sys
 import numpy as np
 import yaml
@@ -1135,6 +1136,21 @@ def rebin_hist_2d(hist2d, slices, name, naming):
     return outputs
 
 
+def other_point_signal(key, patterns, param_name, value):
+    """Whether `key` is a signal histogram (nominal or variation) of a model point other
+    than `value`. A rebinned file is only read for its own point, so those are dropped.
+    """
+    placeholder = "${" + param_name + "}"
+    for pattern in patterns:
+        head, found, tail = pattern.partition(placeholder)
+        if not found:
+            continue
+        match = re.match(re.escape(head) + r"(\d+)" + re.escape(tail) + r"(?:_|$)", key)
+        if match and match.group(1) != str(value):
+            return True
+    return False
+
+
 def process_category(
     sources,
     channel,
@@ -1267,6 +1283,10 @@ def process_category(
             print(f"  [skip] {source_era} {in_dir}: not in the input")
             continue
         for key in [k.GetName() for k in cat_dir.GetListOfKeys()]:
+            if other_point_signal(
+                key, cfg["signal_hist_name_patterns"], param_name, mass
+            ):
+                continue
             hist2d = get_hist(in_file, prefix + key)
             if hist2d is None or hist2d.GetDimension() != 2:
                 continue
