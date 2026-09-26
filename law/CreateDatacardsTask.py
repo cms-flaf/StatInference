@@ -148,8 +148,8 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         """Which axis of the 2D input the rebinned shapes are binned along: 0 = x, 1 = y.
 
         Read off the binning record the preprocess step wrote beside the shapes. A greedy
-        slice selects on x and bins y; a y_window category (a slice with a "y_range")
-        selects on y and bins x. With no record the shapes are the x-sliced kind, whose
+        slice, or a window on x, selects on x and bins y; a window on y (a slice with a
+        "y_range") selects on y and bins x. With no record the shapes are the x-sliced kind, whose
         surviving axis is y -- which is also what this assumed before windows existed.
         """
         import json
@@ -176,7 +176,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         entry -- histograms.yaml records both as ``var_list: [x, y]``, so the axis
         metadata the plotter needs is already described and does not have to be restated
         here. `axis` picks which, from _surviving_axis(): x-sliced shapes keep y, a
-        y_window keeps x. Taking y unconditionally labelled every window panel with the y
+        window on y keeps x. Taking y unconditionally labelled every window panel with the y
         variable under bins of x (in HH->bbWW, "Deep HME Mass" under DNN-score bins). For
         input that was always 1D, the variable is its own answer.
         """

@@ -62,21 +62,24 @@ BINNING_DEFAULTS = {
     "significance_mode": "asimov",
     # How the edges are found. "greedy" is the original: x is cut into slices, each
     # boundary the best one taken on its own, and the y bins inside a slice are
-    # equal-signal quantiles merged until the gates pass. "y_window" does the reverse: one
-    # window on y per category, with x binned inside it by an exact partition search --
-    # see _discover_y_window(). Default stays "greedy" so adding this moves nothing until
-    # a configuration asks for it.
+    # equal-signal quantiles merged until the gates pass. "window" keeps one window per
+    # category on window_axis, with the other axis binned inside it by an exact partition
+    # search -- see _discover_window(). Default stays "greedy" so adding this moves nothing
+    # until a configuration asks for it.
     "strategy": "greedy",
-    # y_window only: a bin must earn its place. The split that creates it has to raise
+    # window only: the axis the window is cut on, "y" or "x". The other axis is the one
+    # binned inside it.
+    "window_axis": "y",
+    # window only: a bin must earn its place. The split that creates it has to raise
     # this category's Z^2 by at least this fraction of the category's own achievable
     # total, or it is given back. 0.0 leaves the count to max_bins_per_slice alone.
     "dp_min_bin_gain": 0.0,
-    # y_window only: the search grid for the window edges. A full scan is ny(ny+1)/2 windows
+    # window only: the search grid for the window edges. A full scan is ny(ny+1)/2 windows
     # and every one of them carries its own dynamic program over the binned axis, so the
     # edges are scanned on a stride and then refined within +-window_refine of the winner.
     "window_stride": 6,
     "window_refine": 5,
-    # y_window only: the window is searched only where the signal is. A window that
+    # window only: the window is searched only where the signal is. A window that
     # starts beyond the signal adds background and no signal; scanning it is wasted time,
     # and including it in the grid costs resolution where the answer actually lies.
     "window_signal_quantile": 0.001,
@@ -86,7 +89,8 @@ BINNING_DEFAULTS = {
 # choices= uses -- significance_mode already learned this lesson: it is read by a
 # function that silently treats anything unrecognised as a default, so a typo in the
 # yaml quietly changed the answer instead of failing.
-BINNING_STRATEGIES = ("greedy", "y_window")
+BINNING_STRATEGIES = ("greedy", "window")
+WINDOW_AXES = ("y", "x")
 
 
 def load_binning_config(path, overrides=None):
@@ -122,6 +126,11 @@ def load_binning_config(path, overrides=None):
         raise RuntimeError(
             f"{path or 'binning configuration'}: strategy '{knobs['strategy']}' is not "
             f"one of {sorted(BINNING_STRATEGIES)}."
+        )
+    if knobs["window_axis"] not in WINDOW_AXES:
+        raise RuntimeError(
+            f"{path or 'binning configuration'}: window_axis '{knobs['window_axis']}' is "
+            f"not one of {sorted(WINDOW_AXES)}."
         )
     return knobs
 
@@ -839,12 +848,15 @@ def _best_count(values, cap):
 
 
 def _window_value(cells, y0, y1, knobs, check=False):
-    """What one window on y is worth: the best 1D binning of x inside it.
+    """What one window is worth: the best 1D binning of the other axis inside it.
+
+    In the cells' own frame the window is always on y and the bins along x;
+    _discover_window builds the cells transposed when window_axis is x.
 
     A window is scored by the binning it admits, not by its own integrated significance.
     Those are different questions and they pick different windows -- scored on its own, a
-    window is rewarded for swallowing as much signal as it can and the shape along x
-    inside it plays no part, which is the opposite of what the fit will do with it.
+    window is rewarded for swallowing as much signal as it can and the shape inside it
+    plays no part, which is the opposite of what the fit will do with it.
     """
     mode = knobs["significance_mode"]
     # which backgrounds count as negligible is decided once, over the whole window -- see
@@ -885,20 +897,26 @@ def _window_value(cells, y0, y1, knobs, check=False):
     return values[n], [(a + 1, b + 1) for a, b in partitions[n]]
 
 
-def _discover_y_window(sig2d, bkg2d_by_name, knobs):
-    """One window on y per category, with x binned inside it.
+def _discover_window(sig2d, bkg2d_by_name, knobs):
+    """One window per category on window_axis, with the other axis binned inside it.
 
     The greedy strategy cuts x into slices that each become a datacard category and gives
-    every slice a shape along y. This one does the reverse and keeps only one category: a
-    single contiguous window on y around the signal, and a 1D distribution of x inside it.
-    Everything outside the window is dropped -- that is what makes it a cut rather than a
-    slice, and it is why the window has to earn its acceptance loss in purity. It suits a
-    y the signal peaks in (in HH->bbWW, x is the DNN score and y the HME mass), and it
-    keeps only one region of y, so a signal with two separated peaks would lose one.
+    every slice a shape along y. This one keeps only one category: a single contiguous
+    window around the signal on one axis, and a 1D distribution of the other axis inside
+    it. Everything outside the window is dropped -- that is what makes it a cut rather than
+    a slice, and it is why the window has to earn its acceptance loss in purity. It suits
+    a window axis the signal peaks in (in HH->bbWW, window_axis y is the HME mass and x the
+    DNN score), and it keeps only one region of that axis, so a signal with two separated
+    peaks would lose one.
+
+    The search below is written with the window on y. For window_axis x the cells are
+    built transposed, so the same search runs, and the result is turned back into the
+    original axes before it is returned.
 
     Window and binning are chosen together; see _window_value.
     """
-    cells = build_cells(sig2d, bkg2d_by_name, significance)
+    transpose = knobs["window_axis"] == "x"
+    cells = build_cells(sig2d, bkg2d_by_name, significance, transpose=transpose)
     ny = cells.ny
     # where the signal actually is -- see window_signal_quantile
     cumulative = np.array(
@@ -937,6 +955,10 @@ def _discover_y_window(sig2d, bkg2d_by_name, knobs):
     # yield disagree with the cut the category claims to be.
     y0 = 0 if y0 <= 1 else y0
     y1 = ny + 1 if y1 >= ny else y1
+    if transpose:
+        # back to the input's axes: the window is on x and the bins run along y, which is
+        # the layout the greedy slices use, so everything downstream already reads it
+        return [{"x_range": (y0, y1), "y_ranges": bins}]
     return [{"y_range": (y0, y1), "x_ranges": bins}]
 
 
@@ -950,8 +972,8 @@ def discover_binning(sig2d, bkg2d_by_name, knobs):
 
     Returns None when the category cannot be binned, which the caller reports as a skip.
     """
-    if knobs["strategy"] == "y_window":
-        return _discover_y_window(sig2d, bkg2d_by_name, knobs)
+    if knobs["strategy"] == "window":
+        return _discover_window(sig2d, bkg2d_by_name, knobs)
     return _discover_greedy(sig2d, bkg2d_by_name, knobs)
 
 
@@ -1122,9 +1144,10 @@ def record_to_slices(record, x_axis, y_axis, where):
 def slice_parts(sl):
     """(selection range, bin ranges, which axis the selection is on) for one category.
 
-    Two layouts reach this point. The greedy strategy cuts x into categories and gives
-    each a shape along y: {"x_range", "y_ranges"}. The y_window strategy cuts y and gives
-    the one category a shape along x: {"y_range", "x_ranges"}. Everything downstream --
+    Two layouts reach this point: a selection on x with a shape along y,
+    {"x_range", "y_ranges"} -- the greedy slices, and a window with window_axis x -- and a
+    selection on y with a shape along x, {"y_range", "x_ranges"} -- a window with
+    window_axis y. Everything downstream --
     the writer, the record, the objective -- needs the same three things from either, and
     asking here is what keeps that code from having to know which strategy ran.
     """
@@ -1604,8 +1627,16 @@ if __name__ == "__main__":
         default=None,
         choices=list(BINNING_STRATEGIES),
         help="how the edges are found: 'greedy' = each slice boundary taken on its own "
-        "and equal-signal quantiles inside it, 'y_window' = one window on y per category "
-        "with x binned inside it by an exact partition search",
+        "and equal-signal quantiles inside it, 'window' = one window per category on "
+        "--window-axis with the other axis binned inside it by an exact partition search",
+    )
+    parser.add_argument(
+        "--window-axis",
+        required=False,
+        type=str,
+        default=None,
+        choices=list(WINDOW_AXES),
+        help="for strategy 'window': the axis the window is cut on (default y)",
     )
     parser.add_argument(
         "--significance-mode",
@@ -1621,6 +1652,7 @@ if __name__ == "__main__":
     overrides = {name: getattr(args, name) for name in knob_args}
     overrides["significance_mode"] = args.significance_mode
     overrides["strategy"] = args.strategy
+    overrides["window_axis"] = args.window_axis
     knobs = load_binning_config(args.binning_config, overrides)
 
     frozen_binning = None

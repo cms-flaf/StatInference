@@ -2,8 +2,9 @@
 
 The greedy binner asks its questions one candidate at a time and re-integrates the
 histograms for each, which is affordable because it only ever looks at ~nx windows. The
-y_window search looks at ~ny^2 windows and runs an exact partition search over ~nx^2
-candidate bins of x inside every one, so the integrals have to become table lookups or
+window search looks at ~ny^2 windows and runs an exact partition search over ~nx^2
+candidate bins of x inside every one (in the cells' own frame, where the window is on y;
+build_cells transposes the input when the window is on x), so the integrals have to become table lookups or
 the search is not worth running.
 That is all this module does: it turns the TH2s into cumulative arrays and hands back the
 same yields, errors and figure of merit the greedy path would have computed.
@@ -173,11 +174,14 @@ class Cells:
         return {n for n, v in y.items() if v < min_frac * total}
 
 
-def build_cells(sig2d, bkg2d_by_name, significance):
+def build_cells(sig2d, bkg2d_by_name, significance, transpose=False):
     """Cells for one channel/category, from the same histograms discover_binning() reads.
 
     sig2d is the already-summed discovery signal; bkg2d_by_name is
     {background: [hist per discovery era]}, summed here the way _bkg_yields() sums it.
+
+    transpose swaps the two axes, so the cells' x is the input's y and vice versa. The
+    window search is written with the window on y; this is how it runs on x instead.
     """
     nx = sig2d.GetNbinsX()
     ny = sig2d.GetNbinsY()
@@ -193,6 +197,11 @@ def build_cells(sig2d, bkg2d_by_name, significance):
             variances += e2
         bkg[name] = values
         var[name] = variances
+    if transpose:
+        nx, ny = ny, nx
+        sig = sig.T.copy()
+        bkg = {name: a.T.copy() for name, a in bkg.items()}
+        var = {name: a.T.copy() for name, a in var.items()}
     return Cells(nx, ny, sig, bkg, var, significance)
 
 
@@ -268,12 +277,12 @@ def binning_objective(cells, slices, mode):
     """
     per_slice = []
     for sl in slices:
-        if "y_range" in sl:  # y_window: selection on y, bins along x
+        if "y_range" in sl:  # selection on y, bins along x
             ylo, yhi = sl["y_range"]
             per_slice.append(
                 sum(cells.score(a, b, ylo, yhi, mode) for a, b in sl["x_ranges"])
             )
-        else:  # greedy slice: selection on x, bins along y
+        else:  # selection on x, bins along y
             xlo, xhi = sl["x_range"]
             per_slice.append(
                 sum(cells.score(xlo, xhi, a, b, mode) for a, b in sl["y_ranges"])
@@ -385,7 +394,8 @@ def _axis_ranges(prefix, a, b, n, axis, include_outer=False):
 def window_tables(cells, y0, y1, exempt, knobs, mode):
     """(score, valid) over every candidate bin of the *sliced-on-y* layout.
 
-    The window is a cut on y around the signal, and the bins run along x. The gates are
+    The window is a cut on the cells' y around the signal, and the bins run along their
+    x (build_cells transposes the input when the window is on x). The gates are
     _bin_passes() and the figure of merit significance(), as
     whole-array operations: the scalar path -- building a yields dict and an errors dict
     per candidate and calling _bin_passes -- costs about 80 microseconds a candidate, and
@@ -472,14 +482,14 @@ def check_window_mask(
         got = bool(valid[a - 1, b - 1])
         if got != want:
             raise AssertionError(
-                f"binning_dp window gate disagrees with _bin_passes on x bins {a}..{b} "
-                f"of the y window {y0}..{y1}: fast path says {'valid' if got else 'invalid'}, "
+                f"binning_dp window gate disagrees with _bin_passes on bins {a}..{b} "
+                f"of the window {y0}..{y1}: fast path says {'valid' if got else 'invalid'}, "
                 f"_bin_passes says {'valid' if want else 'invalid'}."
             )
         if want:
             expected = cells.score(lo, hi, y0, y1, mode)
             if abs(expected - score[a - 1, b - 1]) > 1e-9 * max(abs(expected), 1.0):
                 raise AssertionError(
-                    f"binning_dp window score disagrees with significance() on x bins "
-                    f"{a}..{b} of the y window {y0}..{y1}: {score[a - 1, b - 1]!r} vs {expected!r}."
+                    f"binning_dp window score disagrees with significance() on bins "
+                    f"{a}..{b} of the window {y0}..{y1}: {score[a - 1, b - 1]!r} vs {expected!r}."
                 )
