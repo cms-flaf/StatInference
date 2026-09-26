@@ -15,7 +15,7 @@ if __name__ == "__main__":
         sys.path.append(base_dir)
     __package__ = pkg_dir_name
 
-from StatInference.common.tools import importROOT, CategoryNaming
+from StatInference.common.tools import importROOT, CategoryNaming, InputCategories
 from StatInference.common.param_parse import extractParameters, applyParameters
 from StatInference.dc_make.model import Model
 from StatInference.common.binning_dp import (
@@ -189,6 +189,8 @@ def load_config(config_path):
         # it against the pattern the shapes are actually written with. None when the
         # configuration names no pattern, and then there is nothing to check.
         "category_pattern": cfg.get("category_pattern"),
+        # where each base category is read from, if the input keys it per model point
+        "input_categories": InputCategories.fromConfig(cfg),
         "signal_hist_name_patterns": signal_hist_names,
         "signal_param_name": extractParameters(signal_hist_names[0])[0],
         "mass_values": mass_values,
@@ -1164,12 +1166,15 @@ def process_category(
     # The resonance parameter is named by the configuration, not by this script -- it is
     # "MX" for bbWW but the slicing knows nothing about which parameter it is scanning.
     param_name = cfg["signal_param_name"]
-    prefix = f"{channel}/{category}/"
+    # read from where the input keeps this category for this mass (see InputCategories);
+    # written under the category's own name
+    in_dir = f"{channel}/{cfg['input_categories'].path(category, {param_name: mass})}"
+    prefix = f"{in_dir}/"
     # The key list comes from the first source era; a systematic that only some eras carry
     # is filled in from their nominal when the slices are written below.
-    cat_dir = sources[0][1].Get(f"{channel}/{category}")
+    cat_dir = sources[0][1].Get(in_dir)
     if not cat_dir:
-        print(f"  [skip] {channel}/{category}: not found in {sources[0][1].GetName()}")
+        print(f"  [skip] {in_dir}: not found in {sources[0][1].GetName()}")
         return
 
     signal_keys = [
@@ -1257,9 +1262,9 @@ def process_category(
                 f"{channel}/{naming.name(category, slice_idx)}",
                 format_var_range(*ranges[slice_idx], var=cfg["slice_var"]),
             )
-        cat_dir = in_file.Get(f"{channel}/{category}")
+        cat_dir = in_file.Get(in_dir)
         if not cat_dir:
-            print(f"  [skip] {source_era} {channel}/{category}: not in the input")
+            print(f"  [skip] {source_era} {in_dir}: not in the input")
             continue
         for key in [k.GetName() for k in cat_dir.GetListOfKeys()]:
             hist2d = get_hist(in_file, prefix + key)
