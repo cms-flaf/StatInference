@@ -2,6 +2,7 @@ import contextlib
 import law
 import luigi
 import os
+import re
 import shutil
 import yaml
 
@@ -29,9 +30,25 @@ class StatInferenceTask(Task):
         description="version of the Hists_merged tree to read; defaults to --version",
     )
 
+    # set per member by a combination configuration
+    datacard_config = luigi.Parameter(
+        default="",
+        description="datacard configuration to use instead of StatInference.config",
+    )
+    # empty keeps a single configuration's paths unchanged
+    datacard_tag = luigi.Parameter(
+        default="",
+        description="sub-directory of --version holding this configuration's products",
+    )
+
     @property
     def input_hists_version(self):
         return self.hists_version or self.version
+
+    def version_parts(self):
+        """--version, then the tag ("combined" for a combination's own products)."""
+        tag = self.datacard_tag or ("combined" if self.is_combination() else "")
+        return (self.version, tag) if tag else (self.version,)
 
     def output_dir_target(self, *path):
         """remote_dir_target() that also works when fs_default is a local directory.
@@ -50,9 +67,8 @@ class StatInferenceTask(Task):
         return self.remote_dir_target(*path)
 
     def datacard_config_path(self):
-        return os.path.join(
-            self.ana_path(), self.global_params["StatInference"]["config"]
-        )
+        path = self.datacard_config or self.global_params["StatInference"]["config"]
+        return path if os.path.isabs(path) else os.path.join(self.ana_path(), path)
 
     def get_config_data(self):
         # Cached per instance: requires()/workflow_requires() are re-entered many times
@@ -61,6 +77,49 @@ class StatInferenceTask(Task):
             with open(self.datacard_config_path(), "r") as f:
                 self._config_data = yaml.safe_load(f)
         return self._config_data
+
+    def is_combination(self):
+        """Whether the configuration combines others (`members:`) rather than building
+        datacards itself."""
+        return bool(self.get_config_data().get("members"))
+
+    def members(self):
+        """{name: {config, hists_version, user_custom, customisations}}, validated."""
+        members = self.get_config_data().get("members") or {}
+        known = {"config", "hists_version", "user_custom", "customisations"}
+        for name, spec in members.items():
+            if not isinstance(spec, dict) or "config" not in spec:
+                raise RuntimeError(
+                    f"{self.datacard_config_path()}: member '{name}' must be a mapping "
+                    "with at least 'config'"
+                )
+            unknown = sorted(set(spec) - known)
+            if unknown:
+                raise RuntimeError(
+                    f"{self.datacard_config_path()}: member '{name}' has unknown keys "
+                    f"{unknown}; known are {sorted(known)}"
+                )
+            if not re.fullmatch(r"[A-Za-z0-9_]+", str(name)) or name == "combined":
+                raise RuntimeError(
+                    f"{self.datacard_config_path()}: member name '{name}' must be "
+                    "alphanumeric and not 'combined' -- it names a directory and a "
+                    "combineCards label"
+                )
+        return members
+
+    def member_req(self, name, cls, **kwargs):
+        """`cls` for member `name`: its own configuration, tag and histograms (FLAF
+        builds a Setup per user_custom). Everything else is inherited."""
+        spec = self.members()[name]
+        params = dict(
+            datacard_config=spec["config"],
+            datacard_tag=name,
+            hists_version=spec.get("hists_version", self.hists_version),
+            user_custom=spec.get("user_custom", self.user_custom),
+            customisations=spec.get("customisations", self.customisations),
+        )
+        params.update(kwargs)
+        return cls.req(self, **params)
 
     @property
     def datacard_era(self):
@@ -85,7 +144,7 @@ class StatInferenceTask(Task):
 
         Identical to the old value for every task without a meta_era.
         """
-        return (self.version, self.__class__.__name__, self.datacard_era)
+        return (*self.version_parts(), self.__class__.__name__, self.datacard_era)
 
     def datacards_dir(self, era):
         """Local directory holding an era's datacards.
@@ -94,7 +153,9 @@ class StatInferenceTask(Task):
         combine sees them; ResonantLimitsTask mirrors them here and everything downstream
         (dhi's --multi-datacards globbing, the overlay plots) resolves against this path.
         """
-        return os.path.join(self.ana_data_path(), self.version, "Datacards", era)
+        return os.path.join(
+            self.ana_data_path(), *self.version_parts(), "Datacards", era
+        )
 
     def preprocess_config(self):
         """The datacard configuration's `preprocess:` block, or None.

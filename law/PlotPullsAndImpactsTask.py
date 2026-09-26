@@ -42,10 +42,16 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
 
     def requires(self):
         # ResonantLimitsTask is what writes the combined cards this reads.
+        if self.is_combination():
+            # card_for()/card_family() only know a single configuration's layout
+            raise RuntimeError(
+                f"{self.datacard_config_path()} is a combination; impacts are not yet "
+                "supported for it. Run them on a member with --datacard-config."
+            )
         return [ResonantLimitsTask.req(self)]
 
     def output(self):
-        return self.output_dir_target(self.version, "ImpactPlots")
+        return self.output_dir_target(*self.version_parts(), "ImpactPlots")
 
     def entry_eras(self, entry):
         """The eras an entry is drawn for.
