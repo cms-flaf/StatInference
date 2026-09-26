@@ -74,12 +74,17 @@ class DatacardMaker:
         # writes them, not self.categories: once a category list is expanded against a
         # rebinning record (base "SR/res2b" -> "SR/res2b_hmebox0"), the map's keys -- the
         # configured names -- no longer appear in it, and every key would read as unknown.
+        # A key may also be the base of a configured sliced name: that map is for
+        # rebin_2d.py, and the sliced shapes it writes are read under their own names.
         self.input_categories = InputCategories.fromConfig(cfg)
-        unknown = self.input_categories.unknown(cfg["categories"])
+        configured = list(cfg["categories"])
+        unknown = self.input_categories.unknown(
+            configured + [self.naming.base(c) for c in configured]
+        )
         if unknown:
             raise RuntimeError(
-                f"input_categories maps {unknown}, which are not configured categories "
-                f"({list(cfg['categories'])})"
+                f"input_categories maps {unknown}, which are neither configured "
+                f"categories nor their bases ({configured})"
             )
         self.signalFractionForRelevantBins = cfg["signalFractionForRelevantBins"]
 
