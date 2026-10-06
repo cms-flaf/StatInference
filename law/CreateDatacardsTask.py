@@ -143,13 +143,35 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                     base_dir_local.abspath, config, local_output.abspath
                 )
 
-    def plot_variable(self, variable):
+    @staticmethod
+    def _surviving_axis(base_dir):
+        """Which axis of the 2D input the rebinned shapes are binned along: 0 = x, 1 = y.
+
+        Read from binning.json: a slice with a "y_range" (a window on y) is binned along x,
+        anything else along y. Without a record, y.
+        """
+        import json
+
+        path = os.path.join(base_dir, "binning.json")
+        try:
+            with open(path) as f:
+                record = json.load(f)
+        except (OSError, ValueError):
+            return 1
+        node = record.get("binning", {})
+        # era -> mass -> channel -> category -> {"slices": [...]}
+        while isinstance(node, dict) and "slices" not in node:
+            if not node:
+                return 1
+            node = next(iter(node.values()))
+        slices = node.get("slices") if isinstance(node, dict) else None
+        return 0 if slices and "y_range" in slices[0] else 1
+
+    def plot_variable(self, variable, axis=1):
         """The variable whose axis the shapes are binned along, for histograms.yaml.
 
-        For input a 2D->1D rebinning produced, that is the y variable of the 2D entry --
-        histograms.yaml records both as ``var_list: [x, y]``, so the axis metadata the
-        plotter needs is already described and does not have to be restated here. For
-        input that was always 1D, the variable is its own answer.
+        For 2D->1D rebinned input, the entry of the 2D variable's ``var_list: [x, y]``
+        picked by `axis` (from _surviving_axis()); for 1D input, the variable itself.
         """
         try:
             import FLAF.Common.Setup as Setup
@@ -157,7 +179,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             hists = Setup.Setup(self.ana_path(), self.period, self.version).hists
             var_list = hists[variable].get("var_list")
             if var_list and len(var_list) > 1:
-                return var_list[1]
+                return var_list[axis]
         except Exception as e:
             print(f"Warning: no var_list for {variable} ({e}); plotting it as itself")
         return variable
@@ -332,7 +354,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                 # binning -- so no --rebin, which would coarsen it back to the histograms.yaml
                 # grid and undo the whole point of the rebinning.
                 "--var",
-                self.plot_variable(variable),
+                self.plot_variable(variable, self._surviving_axis(base_dir)),
                 # The plotted shapes are the sum over every sub-era, so the label has to
                 # name the combination: HistPlotter reads config/plot/<year>.yaml for the
                 # luminosity, and a sub-era's file states that sub-era's luminosity alone.
