@@ -4,7 +4,7 @@ import os
 import yaml
 
 from CombineHarvester.CombineTools.ch import CombineHarvester
-
+from StatInference.common.createworkspace import build_fakes_workspace
 from StatInference.common.tools import (
     listToVector,
     rebinAndFill,
@@ -62,6 +62,12 @@ class DatacardMaker:
         self.analysis = cfg["analysis"]
         self.eras = cfg["eras"]
         self.channels = cfg["channels"]
+        self.transfer_factor = cfg["transfer_factor"]
+        if self.analysis == "hh_bbww":
+            self.transfer_factor = cfg["transfer_factor"]
+        else:
+            self.transfer_factor = None
+
         # The categories are exactly the ones the configuration lists -- the datacard bins
         # are whatever directories the input shapes contain, and nothing here derives them.
         # For input that a 2D->1D rebinning produced that means the sliced names
@@ -101,6 +107,8 @@ class DatacardMaker:
                     "counted twice. List the group or the members, not both."
                 )
 
+        hist_bins = hist_bins or cfg.get("hist_bins", None)
+        self.hist_binner = Binner(hist_bins)
         self.bins = []
         for era, channel, cat in self.ECC():
             bin = self.getBin(era, channel, cat, return_index=False)
@@ -167,8 +175,8 @@ class DatacardMaker:
 
         self.autoMCStats = cfg.get("autoMCStats", {"apply": False})
 
-        hist_bins = hist_bins or cfg.get("hist_bins", None)
-        self.hist_binner = Binner(hist_bins)
+        # hist_bins = hist_bins or cfg.get("hist_bins", None)
+        # self.hist_binner = Binner(hist_bins)
         # print(f"Using hist_bins: {self.hist_binner.hist_bins}")
 
         self.input_files = {}
@@ -176,16 +184,245 @@ class DatacardMaker:
         self.shapes = {}
         self.signal_hists_by_key = {}
 
+    # def getBin(self, era, channel, category, return_name=True, return_index=True):
+    #     name = f"{era}_{self.analysis}_{channel}_{category}"
+    #     if not return_name and not return_index:
+    #         raise RuntimeError("Invalid argument combination")
+    #     if not return_index:
+    #         return name
+    #     index = self.bins.index(name)
+    #     if not return_name:
+    #         return index
+    #     return (index, name)
+    def addFakesToDatacard(
+        self,
+        datacard_file,
+        workspace_info,
+        hist_processes,
+        channel,
+    ):
+        workspace_file = workspace_info["file"]
+        sr_bin = workspace_info["sr_bin"]
+        cr_bin = workspace_info["cr_bin"]
+
+        sr_pdf = workspace_info["sr_pdf"]
+        cr_pdf = workspace_info["cr_pdf"]
+
+        # Workspace is stored in the same directory as the datacard,
+        # so only the filename is needed in the datacard.
+        workspace_name = os.path.basename(workspace_file)
+
+        with open(datacard_file, "r") as f:
+            lines = f.readlines()
+
+        new_lines = []
+        process_names = None
+
+        for line in lines:
+            stripped = line.strip()
+
+            if stripped.startswith("process "):
+                fields = stripped.split()
+
+                # Distinguish the process-name line from the
+                # process-number line.
+                try:
+                    [int(x) for x in fields[1:]]
+                    is_process_id_line = True
+                except ValueError:
+                    is_process_id_line = False
+
+                if not is_process_id_line:
+                    process_names = fields[1:]
+
+                new_lines.append(line)
+                continue
+            if stripped.startswith("rate "):
+                fields = stripped.split()
+
+                if process_names is not None:
+                    for i, process in enumerate(process_names):
+                        if process == "Fakes":
+                            fields[i + 1] = "1"
+
+                new_lines.append(
+                    " ".join(fields) + "\n"
+                )
+                continue
+            if stripped.startswith("shapes * "):
+                fields = stripped.split()
+
+                if len(fields) < 5:
+                    new_lines.append(line)
+                    continue
+
+                bin_name = fields[2]
+                shape_file = fields[3]
+                nominal_pattern = fields[4]
+
+                systematic_pattern = (
+                    fields[5]
+                    if len(fields) >= 6
+                    else None
+                )
+
+                for process in hist_processes:
+                    if systematic_pattern:
+                        new_lines.append(
+                            f"shapes {process} "
+                            f"{bin_name} "
+                            f"{shape_file} "
+                            f"{nominal_pattern} "
+                            f"{systematic_pattern}\n"
+                        )
+                    else:
+                        new_lines.append(
+                            f"shapes {process} "
+                            f"{bin_name} "
+                            f"{shape_file} "
+                            f"{nominal_pattern}\n"
+                        )
+
+                if bin_name == sr_bin:
+                    new_lines.append(
+                        f"shapes Fakes "
+                        f"{bin_name} "
+                        f"{workspace_name} "
+                        f"w:{sr_pdf}\n"
+                    )
+
+                elif bin_name == cr_bin:
+                    new_lines.append(
+                        f"shapes Fakes "
+                        f"{bin_name} "
+                        f"{workspace_name} "
+                        f"w:{cr_pdf}\n"
+                    )
+
+                shape_dir = nominal_pattern.split("/$PROCESS")[0]
+
+                new_lines.append(
+                    f"shapes data_obs "
+                    f"{bin_name} "
+                    f"{shape_file} "
+                    f"{shape_dir}/data_obs\n"
+                )
+
+                continue
+            new_lines.append(line)
+
+        # Fakes transfer-factor model
+
+        fake_config = self.transfer_factor
+
+        cr_initial = fake_config["cr_initial"]
+        tf_sqrt_initial = fake_config["tf_sqrt_initial"]
+        tf_sqrt_sigma = fake_config["tf_sqrt_sigma"]
+        coefficient = fake_config["coefficient"][channel]
+
+
+        new_lines.append("\n")
+        new_lines.append("# Fakes transfer factor\n")
+
+        new_lines.append(
+            f"Fakes_CR rateParam "
+            f"{cr_bin} Fakes "
+            f"{cr_initial}\n"
+        )
+
+        new_lines.append(
+            f"TF_sqrt param "
+            f"{tf_sqrt_initial} "
+            f"{tf_sqrt_sigma}\n"
+        )
+
+        new_lines.append(
+            f"Fakes_SR rateParam "
+            f"{sr_bin} Fakes "
+            f"({coefficient}*@0*@0*@1) "
+            f"TF_sqrt,Fakes_CR\n"
+        )
+        with open(datacard_file, "w") as f:
+            f.writelines(new_lines)
+
     def getBin(self, era, channel, category, return_name=True, return_index=True):
         name = f"{era}_{self.analysis}_{channel}_{category}"
+
+        hme_label = self.hist_binner.getHMELabel(
+            era=era,
+            channel=channel,
+            category=category,
+        )
+
+        if hme_label is not None:
+            name = f"{name.replace('/', '_')}_{hme_label}"
+
         if not return_name and not return_index:
             raise RuntimeError("Invalid argument combination")
+
         if not return_index:
             return name
+
         index = self.bins.index(name)
+
         if not return_name:
             return index
+
         return (index, name)
+
+    def createFakesWorkspace(
+        self,
+        shape_file,
+        era,
+        channel,
+        hme_label,
+        output,
+    ):
+        # Temporary: muon-only
+        if channel != "mu":
+            return None
+
+        sr_category = "OS_Iso/res2b"
+        cr_category = "OS_AntiIso/res2b"
+
+        sr_bin = self.getBin(
+            era,
+            channel,
+            sr_category,
+            return_index=False,
+        )
+
+        cr_bin = self.getBin(
+            era,
+            channel,
+            cr_category,
+            return_index=False,
+        )
+
+        workspace_file = os.path.join(
+            output,
+            f"fakesWorkspace_{era}_{channel}_{hme_label}.root",
+        )
+
+        print("[Fakes] Creating workspace")
+        print(f"[Fakes]   SR = {sr_bin}")
+        print(f"[Fakes]   CR = {cr_bin}")
+        print(f"[Fakes]   output = {workspace_file}")
+
+        build_fakes_workspace(
+            histrootfile=shape_file,
+            wsoutfile=workspace_file,
+            sr_region=sr_bin,
+            cr_region=cr_bin,
+        )
+
+        return {
+            "file": workspace_file,
+            "sr_bin": sr_bin,
+            "cr_bin": cr_bin,
+            "sr_pdf": "Fakes_pdf_SR_quad",
+            "cr_pdf": "Fakes_pdf_CR_quad",
+        }
 
     def mergedAwayIn(self, channel, category):
         """Process names absorbed by an active merged process in this bin.
@@ -1360,22 +1597,68 @@ class DatacardMaker:
                 param_list.append("*")
             # Named after the primary (first configured) signal, so a single-signal
             # config keeps exactly the file names it produced before.
-            proc_name = signal_names[0]
+            hme_label = self.hist_binner.getHMELabel(
+                era=self.eras[0],
+                channel=self.channels[0],
+                category=self.categories[0],
+            )
+            proc_name_str = signal_names[0]
+            proc_name = f"{proc_name_str}_{hme_label}"
             dc_file = os.path.join(output, f"datacard_{proc_name}.txt")
             shape_file = os.path.join(output, f"{proc_name}.root")
 
+            # for subera in self.eras:
+            #     for subchannel in self.channels:
+            #         tmp_output = os.path.join(output, subera, subchannel)
+            #         os.makedirs(tmp_output, exist_ok=True)
+            #         tmp_dc_file = os.path.join(tmp_output, f"datacard_{proc_name}.txt")
+            #         tmp_shape_file = shape_file
+            #         self.cb.cp().era([subera]).channel([subchannel]).mass(
+            #             param_list
+            #         ).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
+
             for subera in self.eras:
                 for subchannel in self.channels:
-                    tmp_output = os.path.join(output, subera, subchannel)
+                    tmp_output = os.path.join(
+                        output,
+                        subera,
+                        subchannel,
+                    )
                     os.makedirs(tmp_output, exist_ok=True)
-                    tmp_dc_file = os.path.join(tmp_output, f"datacard_{proc_name}.txt")
+
+                    tmp_dc_file = os.path.join(
+                        tmp_output,
+                        f"datacard_{proc_name}.txt",
+                    )
                     tmp_shape_file = shape_file
                     self.cb.cp().era([subera]).channel([subchannel]).mass(
                         param_list
-                    ).process(processes).WriteDatacard(tmp_dc_file, tmp_shape_file)
+                    ).process(processes).WriteDatacard(
+                        tmp_dc_file,
+                        tmp_shape_file,
+                    )
+                    if self.analysis == "hh_bbww":
+                        hist_processes = [
+                            name
+                            for name in processes
+                            if name != "Fakes"
+                        ]
 
-                # Same breakdown by base category (all its slices, all channels),
-                # for per-category limits alongside the per-channel ones.
+                        workspace_info = self.createFakesWorkspace(
+                            shape_file=shape_file,
+                            era=subera,
+                            channel=subchannel,
+                            hme_label=hme_label,
+                            output=output,
+                        )
+
+                        if workspace_info is not None:
+                            self.addFakesToDatacard(
+                                datacard_file=tmp_dc_file,
+                                workspace_info=workspace_info,
+                                hist_processes=hist_processes,
+                                channel=subchannel,
+                            )
                 for base_cat, slice_cats in self.getCategoryGroups().items():
                     bin_names = [
                         self.getBin(subera, subchannel, cat, return_index=False)
@@ -1389,9 +1672,6 @@ class DatacardMaker:
                         .mass(param_list)
                         .process(processes)
                     )
-                    # A base category can be absent for a given mass hypothesis (e.g.
-                    # boosted at low MX, where the rebinning found too little signal
-                    # to slice it) -- there is no card to write then.
                     if len(selected.bin_set()) == 0:
                         continue
                     cat_dir = os.path.join(
