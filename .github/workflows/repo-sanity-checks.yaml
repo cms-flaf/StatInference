@@ -13,3 +13,20 @@ jobs:
   sanity-checks:
     uses: cms-flaf/FLAF/.github/workflows/repo-sanity-checks.yaml@main
     secrets: inherit
+
+  # The period -> era rename (multi-era change set): no leftover in this repository's files.
+  # The check lives in FLAF.
+  era-rename-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the check
+        uses: actions/checkout@v4
+        with:
+          repository: cms-flaf/FLAF
+          ref: main
+          path: flaf_check
+          sparse-checkout: run_tools/check_era_rename.py
+          sparse-checkout-cone-mode: false
+      - name: No leftover of the period -> era rename
+        run: python3 flaf_check/run_tools/check_era_rename.py --repo .
