@@ -33,17 +33,17 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
     n_cpus = copy_param(HTCondorWorkflow.n_cpus, 1)
 
     # As on CreateDatacardsTask: preprocessing a meta-era needs its members, and
-    # self.period must stay a real era because FLAF's Setup resolves it against config/.
+    # self.era[0] must stay a real era because FLAF's Setup resolves it against config/.
     meta_era = luigi.Parameter(default="")
 
-    def get_sub_periods(self):
-        return self.get_era_groups().get(self.datacard_era, [self.period])
+    def get_sub_eras(self):
+        return self.get_era_groups().get(self.datacard_era, [self.era[0]])
 
     def input_hist_reqs(self):
         return {
             f"MergedHists_{era}_{variable}": req
             for (era, variable), req in self.merged_hist_reqs(
-                self.get_sub_periods()
+                self.get_sub_eras()
             ).items()
         }
 
@@ -78,7 +78,7 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
         with contextlib.ExitStack() as stack:
             targets = {
                 key: req.output()
-                for key, req in self.merged_hist_reqs(self.get_sub_periods()).items()
+                for key, req in self.merged_hist_reqs(self.get_sub_eras()).items()
             }
             self.check_inputs(targets)
             base_dir_local = stack.enter_context(self.stage_inputs(targets))

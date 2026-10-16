@@ -23,7 +23,7 @@ class MergedHists(StatInferenceTask, law.ExternalTask):
         return self.remote_target(
             self.input_hists_version,
             "Hists_merged",
-            self.period,
+            self.era[0],
             self.variable,
             f"{self.variable}.root",
             fs=self.fs_HistTuple,

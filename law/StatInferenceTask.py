@@ -65,17 +65,17 @@ class StatInferenceTask(Task):
     @property
     def datacard_era(self):
         """The era this task's products belong to: its meta-era if it has one, else
-        `period`. Equal to `period` for every task that does not declare `meta_era`.
+        `era`. Equal to `era` for every task that does not declare `meta_era`.
         """
-        return getattr(self, "meta_era", "") or self.period
+        return getattr(self, "meta_era", "") or self.era[0]
 
     def store_parts(self):
-        """Keyed on datacard_era, not period.
+        """Keyed on datacard_era, not era.
 
-        A meta-era instance is constructed with `period` set to one of its own sub-eras
-        -- FLAF's Setup only knows real periods -- so keying on `period` gave
-        CreateDatacardsTask(period=Run3_2022) and
-        CreateDatacardsTask(period=Run3_2022, meta_era=Run3_Early) the same store path.
+        A meta-era instance is constructed with `era` set to one of its own sub-eras
+        -- FLAF's Setup only knows real eras -- so keying on `era` gave
+        CreateDatacardsTask(era=Run3_2022) and
+        CreateDatacardsTask(era=Run3_2022, meta_era=Run3_Early) the same store path.
         The declared outputs never collided (they key on datacard_era already), but
         law's HTCondor control files live here: htcondor_output_directory() is
         local_path(), and the submission file is named only after the branches, which
@@ -115,7 +115,7 @@ class StatInferenceTask(Task):
         different datasets, not a double count. Only combining them into one card would
         be -- see get_top_level_eras().
         """
-        return self.get_config_data().get("eras", [self.period])
+        return self.get_config_data().get("eras", [self.era[0]])
 
     def get_top_level_eras(self):
         """The eras that may be *combined* with each other: group eras plus any standalone
@@ -184,14 +184,14 @@ class StatInferenceTask(Task):
     def merged_hist_reqs(self, eras):
         """{(era, variable): MergedHists} -- every merged input file for those eras.
 
-        Read by CreateDatacardsTask over the sub-periods of the era it builds cards for.
+        Read by CreateDatacardsTask over the sub-eras of the era it builds cards for.
         """
         # Deferred: MergedHists subclasses this class, so importing it at module level
         # would be circular.
         from .MergedHists import MergedHists
 
         return {
-            (era, variable): MergedHists.req(self, period=era, variable=variable)
+            (era, variable): MergedHists.req(self, era=(era,), variable=variable)
             for era in eras
             for variable in self.get_required_variables()
         }
