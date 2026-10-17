@@ -48,6 +48,18 @@ histogram?*
 - Histogram names are built from the card and must match what the analysis actually wrote. A
   rename on either side is a silent failure at datacard time.
 
+### Eras
+
+- The FLAF era is `era` (`--era`); `period` is refused by FLAF as a parameter, option or keyword
+  and survives only as the AnaTuple column.
+- `era` is FLAF's `EraParameter(max_len=1)`: a tuple holding one real era. It is read as
+  `self.era[0]` — `self.era` itself in a path, a label or a command is the tuple, not the name.
+  Requirements pass one real era as a tuple: `X.req(self, era=(e,), …)`.
+- A meta-era (`era_groups:` in the card) never goes into `era`, because FLAF's `Setup` knows only
+  real eras: it goes into `meta_era`, and `era` holds one of its sub-eras as the `Setup` anchor.
+  `datacard_era` (`meta_era`, else `era[0]`) keys the outputs and store paths, and
+  `get_sub_eras()` lists the real eras whose histograms feed a card.
+
 ### Binning optimisation
 
 Changes under `bin_opt/` alter which events land in which bin, and therefore the sensitivity.
