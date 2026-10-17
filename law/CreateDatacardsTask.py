@@ -112,9 +112,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             else:
                 targets = {
                     key: req.output()
-                    for key, req in self.merged_hist_reqs(
-                        self.get_sub_eras()
-                    ).items()
+                    for key, req in self.merged_hist_reqs(self.get_sub_eras()).items()
                 }
                 self.check_inputs(targets)
                 base_dir_local = stack.enter_context(self.stage_inputs(targets))
