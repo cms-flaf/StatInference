@@ -22,13 +22,13 @@ class ResonantLimitsAndHistPlotTask(StatInferenceTask):
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
     def get_plottable_eras(self):
-        """Real production periods, for FLAF's HistPlotTask.
+        """Real production eras, for FLAF's HistPlotTask.
 
         Deliberately not the same set as ResonantLimitsTask.get_eras(), which returns the
         eras that carry their own datacards -- for a configuration with an `era_groups:`
         entry that is the meta-era, and this is its members. The two are complements:
         limits are set on the combination, while the input histograms can only be plotted
-        for periods that really exist, since HistPlotTask resolves `period` against
+        for eras that really exist, since HistPlotTask resolves `era` against
         config/<era>/.
 
         So a group era is replaced by its members rather than dropped. Filtering it out
@@ -37,11 +37,11 @@ class ResonantLimitsAndHistPlotTask(StatInferenceTask):
         success having required no HistPlotTask.
         """
         era_groups = self.get_era_groups()
-        eras = self.get_config_data().get("eras", [self.period])
+        eras = self.get_config_data().get("eras", [self.era[0]])
         plottable = []
         for e in eras:
             for real_era in era_groups.get(e, [e]):
-                # A configuration may list a group and its members both; each period is
+                # A configuration may list a group and its members both; each era is
                 # plotted once.
                 if real_era not in plottable:
                     plottable.append(real_era)
@@ -54,7 +54,7 @@ class ResonantLimitsAndHistPlotTask(StatInferenceTask):
             # under hists_version -- req() would otherwise copy this task's own version
             # and schedule a fresh production of them under it.
             reqs.append(
-                HistPlotTask.req(self, period=e, version=self.input_hists_version)
+                HistPlotTask.req(self, era=(e,), version=self.input_hists_version)
             )
         return reqs
 

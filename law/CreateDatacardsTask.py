@@ -20,7 +20,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
     Runs dc_make/create_datacards.py on whatever `<era>/<variable>/<variable>.root` tree
     it is given -- the configuration's `preprocess:` step if it declares one, otherwise
     the merged histograms directly -- and does no binning of its own. For a meta-era
-    (`meta_era` set, `period` one of its real sub-eras) it holds every sub-era's
+    (`meta_era` set, `era` one of its real sub-eras) it holds every sub-era's
     histograms at once, which is what the summed shape behind each datacard bin is built
     from, and why the stacked shape plots are drawn here.
     """
@@ -28,9 +28,9 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
     max_runtime = copy_param(HTCondorWorkflow.max_runtime, 2.0)
     n_cpus = copy_param(HTCondorWorkflow.n_cpus, 1)
 
-    # If set, build datacards for this meta-era instead of self.period. self.period must
+    # If set, build datacards for this meta-era instead of self.era[0]. self.era[0] must
     # then be one of its real sub-eras -- it is only used to construct a valid FLAF Setup
-    # (Setup.getGlobal requires a real, known period; a meta-era name isn't one).
+    # (Setup.getGlobal requires a real, known era; a meta-era name isn't one).
     meta_era = luigi.Parameter(default="")
 
     # Stacked plots of the shapes going into the cards. This task is where they belong:
@@ -38,10 +38,10 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
     # merged shape (and hence each datacard bin) is built from.
     make_plots = luigi.BoolParameter(default=True)
 
-    def get_sub_periods(self):
-        """Real periods whose histograms feed into datacard_era: its constituent
-        sub-eras for a meta-era, otherwise just [self.period]."""
-        return self.get_era_groups().get(self.datacard_era, [self.period])
+    def get_sub_eras(self):
+        """Real eras whose histograms feed into datacard_era: its constituent
+        sub-eras for a meta-era, otherwise just [self.era[0]]."""
+        return self.get_era_groups().get(self.datacard_era, [self.era[0]])
 
     def input_hist_reqs(self):
         """{key: task} for the shapes the cards are built from.
@@ -59,7 +59,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         return {
             f"MergedHists_{era}_{variable}": req
             for (era, variable), req in self.merged_hist_reqs(
-                self.get_sub_periods()
+                self.get_sub_eras()
             ).items()
         }
 
@@ -112,9 +112,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             else:
                 targets = {
                     key: req.output()
-                    for key, req in self.merged_hist_reqs(
-                        self.get_sub_periods()
-                    ).items()
+                    for key, req in self.merged_hist_reqs(self.get_sub_eras()).items()
                 }
                 self.check_inputs(targets)
                 base_dir_local = stack.enter_context(self.stage_inputs(targets))
@@ -176,7 +174,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         try:
             import FLAF.Common.Setup as Setup
 
-            hists = Setup.Setup(self.ana_path(), self.period, self.version).hists
+            hists = Setup.Setup(self.ana_path(), self.era[0], self.version).hists
             var_list = hists[variable].get("var_list")
             if var_list and len(var_list) > 1:
                 return var_list[axis]
@@ -294,7 +292,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         for variable in self.get_required_variables():
             inputs = [
                 p
-                for era in self.get_sub_periods()
+                for era in self.get_sub_eras()
                 for p in glob.glob(
                     os.path.join(base_dir, era, variable, f"{variable}.root")
                 )
@@ -358,14 +356,14 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                 # The plotted shapes are the sum over every sub-era, so the label has to
                 # name the combination: HistPlotter reads config/plot/<year>.yaml for the
                 # luminosity, and a sub-era's file states that sub-era's luminosity alone.
-                # --period stays a real era -- it builds the Setup, which does not know
+                # --era stays a real era -- it builds the Setup, which does not know
                 # meta-era names.
                 "--year",
                 self.datacard_era,
                 "--ana_path",
                 self.ana_path(),
-                "--period",
-                self.period,
+                "--era",
+                self.era[0],
                 "--LAWrunVersion",
                 self.version,
                 "--wantSignals",

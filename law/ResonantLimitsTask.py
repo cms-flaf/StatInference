@@ -34,9 +34,9 @@ class ResonantLimitsTask(StatInferenceTask):
         era_groups = self.get_era_groups()
         if era in era_groups:
             return CreateDatacardsTask.req(
-                self, period=era_groups[era][0], meta_era=era, **kwargs
+                self, era=(era_groups[era][0],), meta_era=era, **kwargs
             )
-        return CreateDatacardsTask.req(self, period=era, **kwargs)
+        return CreateDatacardsTask.req(self, era=(era,), **kwargs)
 
     def requires(self):
         return [self._create_datacards_req(e, branches=()) for e in self.get_eras()]
