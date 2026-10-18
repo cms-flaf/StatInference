@@ -103,5 +103,5 @@ Verified 2026-08-27; re-check before relying on any of it.
 | Consumers | HH_bbtautau and HH_bbWW use this as a submodule; H_mumu does not |
 | Cards | analysis-side, e.g. `HH_bbWW/config/Datacards/CI_card.yaml` |
 | Tests | none in this repository |
-| Workflows | `formatting-check`, `repo-sanity-checks`, `trigger-flaf-integration`. Formatting is checked automatically — do not comment on it |
+| Workflows | `formatting-check`, `repo-sanity-checks` (FLAF's sanity checks and FLAF's `run_tools/check_era_rename.py` for leftovers of the `period` → `era` rename), `trigger-flaf-integration`. Formatting is checked automatically — do not comment on it |
 | Integration test | Triggered by `@cms-flaf-bot please test`; the pipeline configuration lives in `cms-flaf/FLAF_ci` |
