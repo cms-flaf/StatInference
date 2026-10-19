@@ -24,7 +24,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: cms-flaf/FLAF
-          ref: main
+          # A fixed FLAF commit: the checker's rules change with FLAF, and this repository adopts
+          # a new rule set by moving the pin, in a change that also fixes what the new rules find.
+          ref: e8e42edb2f1626a0875c29ceb5be0992942fb887
           path: flaf_check
           sparse-checkout: run_tools/check_era_rename.py
           sparse-checkout-cone-mode: false
