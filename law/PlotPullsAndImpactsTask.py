@@ -40,6 +40,8 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
     # NO_STR leaves each of those at its own default.
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
+    check_card_eras = True
+
     def requires(self):
         # ResonantLimitsTask is what writes the combined cards this reads.
         return [ResonantLimitsTask.req(self)]

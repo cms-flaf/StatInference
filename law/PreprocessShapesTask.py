@@ -1,6 +1,5 @@
 import contextlib
 import law
-import luigi
 import os
 
 from string import Template
@@ -27,43 +26,40 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
     is what the model's input_file_pattern resolves against and what the merged histograms
     already look like. That is the whole contract: the datacard step cannot tell whether it
     is reading preprocessed shapes or raw ones.
+
+    One branch per card of the configuration, in the order of its `eras:`, as
+    CreateDatacardsTask, whose branch of a card requires the branch of the same card here.
     """
 
     max_runtime = copy_param(HTCondorWorkflow.max_runtime, 4.0)
     n_cpus = copy_param(HTCondorWorkflow.n_cpus, 1)
 
-    # As on CreateDatacardsTask: preprocessing a meta-era needs its members, and
-    # self.era[0] must stay a real era because FLAF's Setup resolves it against config/.
-    meta_era = luigi.Parameter(default="")
-
-    def get_sub_eras(self):
-        return self.get_era_groups().get(self.datacard_era, [self.era[0]])
-
-    def input_hist_reqs(self):
+    def input_hist_reqs(self, card_eras):
         return {
             f"MergedHists_{era}_{variable}": req
             for (era, variable), req in self.merged_hist_reqs(
-                self.get_sub_eras()
+                self.sub_eras_of(card_eras)
             ).items()
         }
 
-    def workflow_requires(self):
+    def stage_workflow_requires(self):
         # Merged with the base class's rather than replacing them: FLAF's HTCondorWorkflow
         # puts the software bundles a submitted job unpacks in there, and returning only
         # our own inputs drops them, so the jobs start without the bundle they need.
-        reqs = super().workflow_requires()
-        reqs.update(self.input_hist_reqs())
+        reqs = super().stage_workflow_requires()
+        # the selected cards only (the map honours --branches)
+        reqs.update(self.input_hist_reqs(self.get_branch_map().values()))
         return reqs
 
     def requires(self):
-        return list(self.input_hist_reqs().values())
+        return list(self.input_hist_reqs([self.branch_data]).values())
 
     def create_branch_map(self):
-        return {0: None}
+        return dict(enumerate(self.card_eras()))
 
     def output(self):
         return self.output_dir_target(
-            self.version, "Hists_preprocessed", self.datacard_era
+            self.version, "Hists_preprocessed", self.branch_data
         )
 
     def run(self):
@@ -75,10 +71,13 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
                 "directly in that case and does not require it."
             )
         script = os.path.join(self.ana_path(), cfg["script"])
+        card_era = self.branch_data
         with contextlib.ExitStack() as stack:
             targets = {
                 key: req.output()
-                for key, req in self.merged_hist_reqs(self.get_sub_eras()).items()
+                for key, req in self.merged_hist_reqs(
+                    self.get_sub_eras(card_era)
+                ).items()
             }
             self.check_inputs(targets)
             base_dir_local = stack.enter_context(self.stage_inputs(targets))
@@ -92,7 +91,7 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
                 "--output",
                 local_output.abspath,
                 "--era",
-                self.datacard_era,
+                card_era,
                 "--config",
                 self.datacard_config_path(),
             ]
@@ -101,7 +100,7 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
             # against the analysis area, so a configuration can point at its own files
             # without absolute paths; every other argument is passed through untouched.
             for arg in cfg.get("args", []):
-                arg = Template(str(arg)).safe_substitute(ERA=self.datacard_era)
+                arg = Template(str(arg)).safe_substitute(ERA=card_era)
                 if arg.startswith("config/"):
                     arg = os.path.join(self.ana_path(), arg)
                 cmd.append(arg)

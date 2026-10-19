@@ -23,23 +23,20 @@ class ResonantLimitsTask(StatInferenceTask):
     # NO_STR leaves each of those at its own default.
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
+    check_card_eras = True
+
     def store_parts(self):
         return (self.version, self.__class__.__name__, "combined")
 
-    def get_eras(self):
-        """Every era the configuration lists: each gets its own cards and its own limit."""
-        return self.get_all_eras()
-
-    def _create_datacards_req(self, era, **kwargs):
-        era_groups = self.get_era_groups()
-        if era in era_groups:
-            return CreateDatacardsTask.req(
-                self, era=(era_groups[era][0],), meta_era=era, **kwargs
-            )
-        return CreateDatacardsTask.req(self, era=(era,), **kwargs)
-
     def requires(self):
-        return [self._create_datacards_req(e, branches=()) for e in self.get_eras()]
+        return CreateDatacardsTask.req(self, branches=())
+
+    def era_card_outputs(self):
+        """{card era: the output of the branch that writes that card}."""
+        return {
+            task.branch_data: task.output()
+            for task in self.requires().get_branch_tasks().values()
+        }
 
     def output(self):
         return {
@@ -77,12 +74,10 @@ class ResonantLimitsTask(StatInferenceTask):
         return local_dir
 
     def run(self):
-        eras = self.get_eras()
         era_cards = {}
 
-        for e in eras:
-            create_dc_br0 = self._create_datacards_req(e, branch=0, branches=())
-            output_dir = self.stage_datacards(e, create_dc_br0.output())
+        for e, card_output in self.era_card_outputs().items():
+            output_dir = self.stage_datacards(e, card_output)
             era_cards[e] = glob.glob(os.path.join(output_dir, "*.txt"))
 
         masses = set()

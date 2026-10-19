@@ -43,6 +43,8 @@ class PlotResonantLimitsTask(DhiPlotMixin, StatInferenceTask):
     # NO_STR leaves each of those at its own default.
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
+    check_card_eras = True
+
     def requires(self):
         # ResonantLimitsTask is what mirrors the cards to datacards_dir(), which is what
         # the globs below resolve against -- the plots cannot be built before it has run.

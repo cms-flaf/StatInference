@@ -1,9 +1,10 @@
 """A scratch analysis for the StatInference law tasks, on the real FLAF and law classes.
 
-The analysis has three real eras (Run3_2022, Run3_2022EE, Run3_2023) and the datacard
-configurations below. Run3_2022EE reads its merged histograms from a store of its own
-(`fs_HistTuple` in config/Run3_2022EE/global.yaml), so an input built with another era's
-Setup points to the wrong store and shows up in the paths.
+The analysis has three real eras behind the cards (Run3_2022, Run3_2022EE, Run3_2023), one
+more configured era (Run3_2023BPix) and the datacard configurations below. Run3_2022EE reads
+its merged histograms from a store of its own (`fs_HistTuple` in
+config/Run3_2022EE/global.yaml), so an input built with another era's Setup points to the
+wrong store and shows up in the paths.
 
 The checkouts under test are found next to each other: `<parent>/StatInference` (this
 repository) and `<parent>/FLAF`, which is how the unit-test workflow lays them out.
@@ -70,6 +71,8 @@ ERA_B = "Run3_2022EE"
 ERA_C = "Run3_2023"
 GROUP = "Run3_Early"
 ERAS = (ERA_A, ERA_B, ERA_C)
+#: a configured era behind no card
+EXTRA_ERA = "Run3_2023BPix"
 
 #: the eras of every card: a group, one of its members and a standalone era
 CARD_ERAS = [GROUP, ERA_A, ERA_C]
@@ -151,7 +154,7 @@ StatInference:
     "config/Datacards/card.yaml": card(preprocess=False),
     "config/Datacards/card_preprocess.yaml": card(preprocess=True),
 }
-for _era in ERAS:
+for _era in ERAS + (EXTRA_ERA,):
     FILES[f"config/{_era}/processes.yaml"] = "data:\n  datasets: [ Data ]\n"
     FILES[f"config/{_era}/datasets.yaml"] = "Data: {}\nTTto2L2Nu: {}\n"
 

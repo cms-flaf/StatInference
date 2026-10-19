@@ -14,6 +14,11 @@ class ResonantLimitsAndHistPlotTask(StatInferenceTask):
     Depends on ResonantLimitsTask, not PlotResonantLimitsTask: this task is about getting
     the limits together with their input histograms, and the limit plots the configuration
     declares in `limit_plots` are asked for separately, by running PlotResonantLimitsTask.
+
+    Its output is a marker written once everything below it ran, so a version it finished
+    is not looked at again: a later run of that version over more eras plots nothing new.
+    Run HistPlotTask or ResonantLimitsTask directly for that, or remove the marker first
+    (`--remove-output 0,a,y`).
     """
 
     # Not a workflow itself. The parameter exists so that --workflow reaches the tasks
@@ -21,42 +26,17 @@ class ResonantLimitsAndHistPlotTask(StatInferenceTask):
     # NO_STR leaves each of those at its own default.
     workflow = luigi.Parameter(default=law.parameter.NO_STR)
 
-    def get_plottable_eras(self):
-        """Real production eras, for FLAF's HistPlotTask.
-
-        Deliberately not the same set as ResonantLimitsTask.get_eras(), which returns the
-        eras that carry their own datacards -- for a configuration with an `era_groups:`
-        entry that is the meta-era, and this is its members. The two are complements:
-        limits are set on the combination, while the input histograms can only be plotted
-        for eras that really exist, since HistPlotTask resolves `era` against
-        config/<era>/.
-
-        So a group era is replaced by its members rather than dropped. Filtering it out
-        and stopping there left a configuration whose `eras:` names only the group -- the
-        mainline 2D one does -- with nothing to plot at all, and this task then reported
-        success having required no HistPlotTask.
-        """
-        era_groups = self.get_era_groups()
-        eras = self.get_config_data().get("eras", [self.era[0]])
-        plottable = []
-        for e in eras:
-            for real_era in era_groups.get(e, [e]):
-                # A configuration may list a group and its members both; each era is
-                # plotted once.
-                if real_era not in plottable:
-                    plottable.append(real_era)
-        return plottable
+    check_card_eras = True
 
     def requires(self):
-        reqs = [ResonantLimitsTask.req(self)]
-        for e in self.get_plottable_eras():
-            # The histograms to plot are the ones the cards were built from, which live
-            # under hists_version -- req() would otherwise copy this task's own version
-            # and schedule a fresh production of them under it.
-            reqs.append(
-                HistPlotTask.req(self, era=(e,), version=self.input_hists_version)
-            )
-        return reqs
+        # The histograms to plot are the ones the cards were built from, which live under
+        # hists_version -- req() would otherwise copy this task's own version and schedule
+        # a fresh production of them under it. One HistPlotTask over every era of --era,
+        # which holds every real era behind the cards (and may hold more, plotted too).
+        return [
+            ResonantLimitsTask.req(self),
+            HistPlotTask.req(self, version=self.input_hists_version),
+        ]
 
     def output(self):
         return self.local_target("dummy.txt")

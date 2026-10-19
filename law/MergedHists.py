@@ -18,13 +18,16 @@ class MergedHists(StatInferenceTask, law.ExternalTask):
     """
 
     variable = luigi.Parameter(description="Hists_merged variable (directory) name")
+    # The era the file belongs to, one of `era`: a task over several eras requires the
+    # files of each, each from that era's own fs_HistTuple.
+    hist_era = luigi.Parameter(description="era of the merged histograms")
 
     def output(self):
         return self.remote_target(
             self.input_hists_version,
             "Hists_merged",
-            self.era[0],
+            self.hist_era,
             self.variable,
             f"{self.variable}.root",
-            fs=self.fs_HistTuple,
+            fs=self.setup_for(self.hist_era).get_fs("HistTuple"),
         )
