@@ -1,0 +1,48 @@
+name: Unit Tests
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      # The tests import `StatInference.<package>` and `FLAF.<package>` from the directory
+      # holding both checkouts, as an analysis does.
+      - uses: actions/checkout@v4
+        with:
+          path: StatInference
+
+      # A fixed FLAF commit: the law tasks here subclass FLAF's, so a new FLAF is adopted by
+      # moving the pin, in a change that also adapts what it breaks.
+      - name: Check out FLAF
+        uses: actions/checkout@v4
+        with:
+          repository: cms-flaf/FLAF
+          ref: 4d9602cdbcdf6d09ba4566b4f83e3878e39975ca
+          path: FLAF
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install pip==26.2.1
+          pip install pyyaml numpy luigi==3.8.1 law==0.1.21 pytest
+
+      # Named explicitly: `unittest discover -s test` would resolve `test.<module>` to
+      # CPython's own `test` package.
+      - name: Run the unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: >-
+          python -m pytest -q
+          StatInference/test/test_law_chain.py
