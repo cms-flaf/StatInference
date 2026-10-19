@@ -52,13 +52,28 @@ histogram?*
 
 - The FLAF era is `era` (`--era`); `period` is refused by FLAF as a parameter, option or keyword
   and survives only as the AnaTuple column.
-- `era` is FLAF's `EraParameter(max_len=1)`: a tuple holding one real era. It is read as
-  `self.era[0]` — `self.era` itself in a path, a label or a command is the tuple, not the name.
-  Requirements pass one real era as a tuple: `X.req(self, era=(e,), …)`.
-- A meta-era (`era_groups:` in the card) never goes into `era`, because FLAF's `Setup` knows only
-  real eras: it goes into `meta_era`, and `era` holds one of its sub-eras as the `Setup` anchor.
-  `datacard_era` (`meta_era`, else `era[0]`) keys the outputs and store paths, and
-  `get_sub_eras()` lists the real eras whose histograms feed a card.
+- Every task here takes several eras (`allow_multi_era = True` on `StatInferenceTask`, without
+  FLAF's era branches): `era` is the sorted tuple of `--era`, which must hold every real era
+  behind the configuration's cards (`card_eras()` raises naming the card and the missing
+  eras). An era's own settings are read through `self.setup_for(era)`; a setting the run reads
+  once through `self.common(getter, what)` or `statinference_settings()`, which raise when
+  the eras disagree. FLAF's `check_era_rename.py`, run in CI, rejects `self.era[...]` and an
+  `era=` keyword in `req()`; `self.global_params`, `self.setup`, `self.fs_*`
+  (except `fs_default`) and `self.datasets` are not checked statically and raise `EraScopeError` only
+  when run over several eras, which the unit tests do (three eras) — flag them in review.
+- The tasks a run starts from that are not workflows (`ResonantLimitsTask`, the plot tasks,
+  `ResonantLimitsAndHistPlotTask`) check the eras against the cards when they are constructed
+  (`check_card_eras`), so the error stops `law run` before scheduling; the card workflows check
+  when they build their map, never in `__init__` (FLAF constructs them over single eras).
+- `CreateDatacardsTask` and `PreprocessShapesTask` are one workflow each whose branches are the
+  cards (`eras:` of the configuration, in its order); `branch_data` is the card era, which may
+  be a group era (`era_groups:`), never in `era` because FLAF's `Setup` knows only real eras.
+  `get_sub_eras(card_era)` lists the real eras whose histograms feed a card; `MergedHists`
+  reads each with `hist_era` from that era's own `fs_HistTuple`.
+- Outputs are keyed on the version and the card, the job state and the logs on the version and
+  the class (`store_parts()`, `remote_log_dir_target()`), never on `--era`, so a run over more
+  eras resumes the same jobs. One datacard configuration per version: the job file is named
+  after the branch numbers, i.e. the positions in `eras:`.
 
 ### Binning optimisation
 
@@ -102,6 +117,6 @@ Verified 2026-08-27; re-check before relying on any of it.
 | Layout | `dc_make/` (datacard construction: `maker.py`, `create_datacards.py`, `process.py`, `model.py`, `uncertainty.py`, `binner.py`), `bin_opt/` (binning optimisation and limits), `common/` (`tools.py`, `param_parse.py`), `law/tasks.py`, `fit_val/`, `config/`, `legacy/`, `test/` (unit tests and their scratch analysis) |
 | Consumers | HH_bbtautau and HH_bbWW use this as a submodule; H_mumu does not |
 | Cards | analysis-side, e.g. `HH_bbWW/config/Datacards/CI_card.yaml` |
-| Tests | `test/test_law_chain.py` (the law tasks on the real FLAF and law classes over a scratch analysis, `test/statinference_fixture.py`: per card the outputs, inputs and payload commands) and `test/test_shape_plots.py` (which histograms a card's shape plots show, through `input_categories`); no ROOT, Combine or dhi; run by `unit-tests` against a pinned FLAF commit |
+| Tests | `test/test_law_chain.py` (the law tasks on the real FLAF and law classes over a scratch analysis, `test/statinference_fixture.py`: per card the outputs, inputs and payload commands), `test/test_card_eras.py` (the card workflows over several eras) and `test/test_shape_plots.py` (which histograms a card's shape plots show, through `input_categories`); no ROOT, Combine or dhi; run by `unit-tests` against a pinned FLAF commit |
 | Workflows | `formatting-check`, `unit-tests`, `repo-sanity-checks` (FLAF's sanity checks and FLAF's `run_tools/check_era_rename.py` for leftovers of the `period` → `era` rename), `trigger-flaf-integration`. Formatting is checked automatically — do not comment on it. A change to an assertion of `test/test_law_chain.py` (not to its helpers) changes what the chain is guaranteed to read, write or run — comment on it |
 | Integration test | Triggered by `@cms-flaf-bot please test`; the pipeline configuration lives in `cms-flaf/FLAF_ci` |
