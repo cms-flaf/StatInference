@@ -46,3 +46,4 @@ jobs:
         run: >-
           python -m pytest -q
           StatInference/test/test_law_chain.py
+          StatInference/test/test_shape_plots.py
