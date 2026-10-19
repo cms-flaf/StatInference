@@ -26,7 +26,7 @@ jobs:
           repository: cms-flaf/FLAF
           # A fixed FLAF commit: the checker's rules change with FLAF, and this repository adopts
           # a new rule set by moving the pin, in a change that also fixes what the new rules find.
-          ref: e8e42edb2f1626a0875c29ceb5be0992942fb887
+          ref: 4d9602cdbcdf6d09ba4566b4f83e3878e39975ca
           path: flaf_check
           sparse-checkout: run_tools/check_era_rename.py
           sparse-checkout-cone-mode: false
