@@ -52,9 +52,9 @@ limits_module = importlib.import_module("StatInference.law.ResonantLimitsTask")
 
 
 def root_params():
-    """The parameters of the task the chain is run from. One era is enough: each card
-    chooses the eras it is built from."""
-    return dict(version=VERSION, era=fx.ERA_A, hists_version=HISTS_VERSION)
+    """The parameters of the task the chain is run from, over every real era behind the
+    cards."""
+    return dict(version=VERSION, era=fx.ERAS, hists_version=HISTS_VERSION)
 
 
 def limits_task():
@@ -66,22 +66,24 @@ def limits_and_histplot_task():
 
 
 def card_workflows(limits):
-    """The CreateDatacardsTask workflows `limits` requires."""
+    """The CreateDatacardsTask workflows `limits` requires: one, whose branches are the
+    cards."""
     return luigi.task.flatten(limits.requires())
 
 
 def cards_of(limits):
     """{card era: the task that writes that card}."""
     return {
-        workflow.datacard_era: fx.si.CreateDatacardsTask.req(workflow, branch=0)
+        task.branch_data: task
         for workflow in card_workflows(limits)
+        for task in workflow.get_branch_tasks().values()
     }
 
 
 def preprocess_of(card):
     """The task that writes the preprocessed shapes `card` reads."""
-    (workflow,) = card.requires()
-    return fx.si.PreprocessShapesTask.req(workflow, branch=0)
+    (preprocess,) = card.requires()
+    return preprocess
 
 
 def histplot_eras(task):

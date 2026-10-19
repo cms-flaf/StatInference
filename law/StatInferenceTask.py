@@ -6,7 +6,7 @@ import shutil
 import yaml
 
 from string import Template
-from FLAF.run_tools.law_customizations import Task
+from FLAF.run_tools.law_customizations import Task, era_csv
 
 
 class StatInferenceTask(Task):
@@ -17,7 +17,25 @@ class StatInferenceTask(Task):
     ``StatInference.config``, not by global.yaml's own variable lists. This base class is
     the single place that file is read, so the four tasks below cannot disagree about
     which eras, masses or variables the analysis consists of.
+
+    A task here may run over several eras (`--era A,B,...`), which must include every real
+    era behind the configuration's cards. The output paths are keyed on the version and the
+    card, the job state on the version and the class, never on `--era`: a card is the same
+    product whichever eras the run also covers.
     """
+
+    allow_multi_era = True
+    # Check the eras of the run against the cards when the task is constructed. On for the
+    # tasks a run starts from that are not workflows, so the error stops `law run` before
+    # luigi schedules anything (a dependency that fails while scheduling leaves its pending
+    # parent, and a worker with keep_alive, waiting for ever). The card workflows check when
+    # they build their map: FLAF constructs them over single eras for their resource tokens.
+    check_card_eras = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.check_card_eras:
+            self.card_eras()
 
     # The Hists_merged tree to read. Separate from `version`, which names what this chain
     # *writes*: re-binning or re-fitting under a new version must not require the input
@@ -49,10 +67,14 @@ class StatInferenceTask(Task):
             return law.LocalDirectoryTarget(os.path.join(*path), fs=fs)
         return self.remote_dir_target(*path)
 
-    def datacard_config_path(self):
-        return os.path.join(
-            self.ana_path(), self.global_params["StatInference"]["config"]
+    def statinference_settings(self):
+        """global.yaml's `StatInference` block, which every era of the task must share."""
+        return self.common(
+            lambda setup: setup.global_params["StatInference"], "StatInference"
         )
+
+    def datacard_config_path(self):
+        return os.path.join(self.ana_path(), self.statinference_settings()["config"])
 
     def get_config_data(self):
         # Cached per instance: requires()/workflow_requires() are re-entered many times
@@ -62,30 +84,19 @@ class StatInferenceTask(Task):
                 self._config_data = yaml.safe_load(f)
         return self._config_data
 
-    @property
-    def datacard_era(self):
-        """The era this task's products belong to: its meta-era if it has one, else
-        `era`. Equal to `era` for every task that does not declare `meta_era`.
-        """
-        return getattr(self, "meta_era", "") or self.era[0]
-
     def store_parts(self):
-        """Keyed on datacard_era, not era.
+        """Keyed on the version and the class, not on `--era`.
 
-        A meta-era instance is constructed with `era` set to one of its own sub-eras
-        -- FLAF's Setup only knows real eras -- so keying on `era` gave
-        CreateDatacardsTask(era=Run3_2022) and
-        CreateDatacardsTask(era=Run3_2022, meta_era=Run3_Early) the same store path.
-        The declared outputs never collided (they key on datacard_era already), but
-        law's HTCondor control files live here: htcondor_output_directory() is
-        local_path(), and the submission file is named only after the branches, which
-        for both is {0: None}. A run needing both -- any configuration listing a group
-        era and its members -- had the second workflow resume from the first's
-        submission data, poll jobs that were not its own, and finish incomplete.
-
-        Identical to the old value for every task without a meta_era.
+        The card workflows hold every card of the configuration as one branch each, so their
+        HTCondor job file (htcondor_output_directory() is local_path()) belongs to the
+        configuration, not to the eras of the run: a later run over more eras resumes the
+        same jobs. FLAF's default keys on the task's one era and refuses several.
         """
-        return (self.version, self.__class__.__name__, self.datacard_era)
+        return (self.version, self.__class__.__name__)
+
+    def remote_log_dir_target(self):
+        """Job logs of a version and class, for the same reason as store_parts()."""
+        return self.output_dir_target(self.version, "logs", self.__class__.__name__)
 
     def datacards_dir(self, era):
         """Local directory holding an era's datacards.
@@ -115,7 +126,39 @@ class StatInferenceTask(Task):
         different datasets, not a double count. Only combining them into one card would
         be -- see get_top_level_eras().
         """
-        return self.get_config_data().get("eras", [self.era[0]])
+        eras = self.get_config_data().get("eras")
+        if not eras:
+            raise ValueError(
+                f"{self.datacard_config_path()} lists no `eras:`; the cards to build are "
+                "named there"
+            )
+        return eras
+
+    def get_sub_eras(self, card_era):
+        """The real eras whose histograms feed the card of `card_era`: the members of a
+        group era, else the era itself."""
+        return self.get_era_groups().get(card_era, [card_era])
+
+    def card_eras(self):
+        """get_all_eras(), once every real era behind those cards is one of this task's
+        eras: a card is built from all of its sub-eras or not at all."""
+        cards = self.get_all_eras()
+        missing = {}
+        for card in cards:
+            absent = [era for era in self.get_sub_eras(card) if era not in self.era]
+            if absent:
+                missing[card] = absent
+        if missing:
+            needed = sorted({era for absent in missing.values() for era in absent})
+            raise ValueError(
+                f"{self.get_task_family()}(era={era_csv(self.era)}): the cards of "
+                f"{self.datacard_config_path()} need "
+                + "; ".join(
+                    f"{card}: {', '.join(absent)}" for card, absent in missing.items()
+                )
+                + f", which --era does not include; add {era_csv(needed)} to --era"
+            )
+        return cards
 
     def get_top_level_eras(self):
         """The eras that may be *combined* with each other: group eras plus any standalone
@@ -191,17 +234,23 @@ class StatInferenceTask(Task):
     def merged_hist_reqs(self, eras):
         """{(era, variable): MergedHists} -- every merged input file for those eras.
 
-        Read by CreateDatacardsTask over the sub-eras of the era it builds cards for.
+        Read by the card tasks over the sub-eras of the cards they build.
         """
         # Deferred: MergedHists subclasses this class, so importing it at module level
         # would be circular.
         from .MergedHists import MergedHists
 
         return {
-            (era, variable): MergedHists.req(self, era=(era,), variable=variable)
+            (era, variable): MergedHists.req(self, hist_era=era, variable=variable)
             for era in eras
             for variable in self.get_required_variables()
         }
+
+    def sub_eras_of(self, card_eras):
+        """The real eras behind the cards of `card_eras`, each once, in order."""
+        return list(
+            dict.fromkeys(era for card in card_eras for era in self.get_sub_eras(card))
+        )
 
     @contextlib.contextmanager
     def stage_inputs(self, targets):
