@@ -159,6 +159,24 @@ class StatInferenceTask(Task):
             )
         return sorted(masses)
 
+    def get_variable_points(self):
+        """{variable: [model point, ...]}: the mass points whose input is that
+        Hists_merged variable, each as {parameter: value}, from the datacard config's
+        input_file_pattern."""
+        data = self.get_config_data()
+        model = data["model"]
+        pattern = model["input_file_pattern"]
+        param_name = model["parameters"][0]
+
+        points = {}
+        for mass in self.get_masses():
+            rel = Template(pattern).safe_substitute({"ERA": "ERA", param_name: mass})
+            # "<era>/<variable>/<variable>.root": the variable is the directory holding
+            # the file, not the file itself.
+            variable = os.path.basename(os.path.dirname(rel))
+            points.setdefault(variable, []).append({param_name: mass})
+        return points
+
     def get_required_variables(self):
         """The Hists_merged variables this chain reads: one per mass point (the 2D
         shape the datacards are built from), derived from the datacard config's
@@ -168,18 +186,7 @@ class StatInferenceTask(Task):
         histTuple_flavor variable list anywhere downstream, so a mass point present here
         is read whether or not the active flavour happens to mention it.
         """
-        data = self.get_config_data()
-        model = data["model"]
-        pattern = model["input_file_pattern"]
-        param_name = model["parameters"][0]
-
-        variables = set()
-        for mass in self.get_masses():
-            rel = Template(pattern).safe_substitute({"ERA": "ERA", param_name: mass})
-            # "<era>/<variable>/<variable>.root": the variable is the directory holding
-            # the file, not the file itself.
-            variables.add(os.path.basename(os.path.dirname(rel)))
-        return sorted(variables)
+        return sorted(self.get_variable_points())
 
     def merged_hist_reqs(self, eras):
         """{(era, variable): MergedHists} -- every merged input file for those eras.

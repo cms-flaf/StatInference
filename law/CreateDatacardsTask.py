@@ -8,7 +8,7 @@ from string import Template
 from FLAF.RunKit.run_tools import ps_call
 from FLAF.run_tools.law_customizations import HTCondorWorkflow, copy_param
 
-from StatInference.common.tools import CategoryNaming, importROOT
+from StatInference.common.tools import CategoryNaming, InputCategories, importROOT
 
 from .PreprocessShapesTask import PreprocessShapesTask
 from .StatInferenceTask import StatInferenceTask
@@ -223,23 +223,39 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         return True
 
     @staticmethod
-    def _present_keys(shape_file, cfg):
-        """The (channel, region, category) triples the summed shape file actually holds."""
+    def _present_keys(shape_file, cfg, points):
+        """({(channel, region, category): input directory} for the datacard bins the summed
+        shape file holds, [every path looked up], or None when the file cannot be read).
+
+        Each category is looked up where the maker reads it for these model points: its
+        `input_categories` directory, else its own name. A category that the points read
+        from different directories is not plotted, since one plot cannot show them.
+        """
         ROOT = importROOT()
-        present = set()
+        input_categories = InputCategories.fromConfig(cfg)
+        present, looked_up = {}, []
         f = ROOT.TFile.Open(shape_file)
         if not f or f.IsZombie():
-            return present
+            return present, None
         try:
             for category in cfg["categories"]:
                 region, _, cat = category.rpartition("/")
+                directories = {input_categories.path(category, p) for p in points}
+                if len(directories) != 1:
+                    print(
+                        f"WARNING: {category} is read from {', '.join(sorted(directories))} "
+                        "for the model points of one variable; it is not plotted"
+                    )
+                    continue
+                (directory,) = directories
                 for channel in cfg["channels"]:
-                    path = "/".join(x for x in (channel, region, cat) if x)
+                    path = "/".join(x for x in (channel, directory) if x)
+                    looked_up.append(path)
                     if f.Get(path):
-                        present.add((channel, region, cat))
+                        present[(channel, region, cat)] = directory
         finally:
             f.Close()
-        return present
+        return present, looked_up
 
     def _stitch_grids(self, cfg, plots_dir, variable, panel_of_key):
         """One grid per base category: its slices across, the channels down."""
@@ -289,6 +305,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         # The datacard bin is the sum over the sub-eras (getCombinedShape does the same at
         # card-build time), so the sub-era files are hadd'ed into the one file the plotter
         # reads. Plotting them separately would show something the fit never sees.
+        variable_points = self.get_variable_points()
         for variable in self.get_required_variables():
             inputs = [
                 p
@@ -315,23 +332,37 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             # from the shapes. HistPlotter exits non-zero on the first key it cannot find,
             # so passing the full list costs every panel and grid that would have come
             # after the gap, not just the missing one.
-            present = self._present_keys(summed, cfg)
-            keys, outputs = [], []
+            present, looked_up = self._present_keys(
+                summed, cfg, variable_points[variable]
+            )
+            keys, outputs, panel_of_key = [], [], {}
             for category in cfg["categories"]:
                 # "SR/res2b_dnn0" -> region "SR", category "res2b_dnn0": HistPlotter
                 # navigates channel -> region -> category.
                 region, _, cat = category.rpartition("/")
                 for channel in cfg["channels"]:
-                    if (channel, region, cat) not in present:
+                    directory = present.get((channel, region, cat))
+                    if directory is None:
                         continue
-                    keys.append(f"{channel}:{cat}:{region}")
-                    outputs.append(
-                        os.path.join(
-                            plots_dir, f"{variable}_{channel}_{region}_{cat}.pdf"
-                        )
+                    # The key names the directory the shapes are read from; the file and
+                    # the grid keep the datacard bin's name.
+                    in_region, _, in_cat = directory.rpartition("/")
+                    keys.append(f"{channel}:{in_cat}:{in_region}")
+                    output = os.path.join(
+                        plots_dir, f"{variable}_{channel}_{region}_{cat}.pdf"
                     )
+                    outputs.append(output)
+                    panel_of_key[f"{channel}:{cat}:{region}"] = output
             if not keys:
-                print(f"WARNING: no shapes to plot for {variable}")
+                if looked_up is None:
+                    reason = f"{summed} cannot be read"
+                elif looked_up:
+                    reason = f"none of {', '.join(looked_up)} is in the summed shapes"
+                else:
+                    reason = "no category is read from one directory"
+                print(f"WARNING: no shapes to plot for {variable}: {reason}")
+                if os.path.exists(summed):
+                    os.remove(summed)
                 continue
             cmd = [
                 "python3",
@@ -372,9 +403,11 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                 "--wantLogScale",
                 "y",
             ]
+            if self.user_custom:
+                cmd += ["--user-custom", self.user_custom]
             try:
                 ps_call(cmd, verbose=1)
-                self._stitch_grids(cfg, plots_dir, variable, dict(zip(keys, outputs)))
+                self._stitch_grids(cfg, plots_dir, variable, panel_of_key)
             except Exception as e:
                 # The datacards are the product that matters; a plotting failure should be
                 # loud but must not leave the task looking broken with valid cards on disk.
