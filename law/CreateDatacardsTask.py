@@ -381,15 +381,8 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                 ",".join(outputs),
                 "--all_keys",
                 ",".join(keys),
-                "--globalConfig",
-                os.path.join(
-                    self.ana_path(),
-                    self.common(
-                        lambda setup: setup.global_params["analysis_config_area"],
-                        "analysis_config_area",
-                    ),
-                    "global.yaml",
-                ),
+                # No config file: HistPlotter takes every setting from the Setup it builds
+                # from --ana_path, --era and --user-custom, as the task's own Setup does.
                 # The surviving axis of the rebinned shapes, and already at its final
                 # binning -- so no --rebin, which would coarsen it back to the histograms.yaml
                 # grid and undo the whole point of the rebinning.
@@ -420,12 +413,13 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
                 ps_call(cmd, verbose=1)
                 self._stitch_grids(cfg, plots_dir, variable, panel_of_key)
             except Exception as e:
-                # The datacards are the product that matters; a plotting failure should be
-                # loud but must not leave the task looking broken with valid cards on disk.
-                print(
-                    f"WARNING: shape plotting failed for {variable}, "
-                    f"datacards are unaffected: {e}"
-                )
+                # A failed plot fails the task: a warning here hid a broken HistPlotter call
+                # behind a green CI (FLAF#365). The cards themselves are fine, so say how to
+                # make them without the plots.
+                raise RuntimeError(
+                    f"shape plotting failed for {variable}: {e}. The datacards are "
+                    "unaffected; run with --make-plots False to produce them without plots."
+                ) from e
             finally:
                 if os.path.exists(summed):
                     os.remove(summed)

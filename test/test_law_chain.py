@@ -178,13 +178,16 @@ class ChainTestCase(unittest.TestCase):
         for path in self.every_merged_hist():
             fx.write(path, "")
 
-    def run_payload(self, task, module):
+    def run_payload(self, task, module, fail=lambda cmd: False):
         """Run `task` with its commands recorded instead of executed: [(cmd, env, files)],
         `files` being the layout of the command's --input directory at the time. A command
-        with --output writes the file `payload_output` there."""
+        with --output writes the file `payload_output` there; a command `fail` accepts
+        raises as a failed ps_call does."""
         calls = []
 
         def ps_call(cmd, env=None, **kwargs):
+            if fail(cmd):
+                raise RuntimeError(f"command failed: {cmd[1]}")
             files = None
             if "--input" in cmd:
                 base = cmd[cmd.index("--input") + 1]
@@ -387,10 +390,9 @@ class PlainChainTest(ChainTestCase):
                     self.assertEqual(self.arg(plot, "--year"), card_era)
                     self.assertEqual(self.arg(plot, "--era"), fx.SUB_ERAS[card_era][0])
                     self.assertEqual(self.arg(plot, "--LAWrunVersion"), VERSION)
-                    self.assertEqual(
-                        self.arg(plot, "--globalConfig"),
-                        os.path.join(ana, "config", "global.yaml"),
-                    )
+                    # HistPlotter builds its Setup from these, so no config file
+                    self.assertEqual(self.arg(plot, "--ana_path"), ana)
+                    self.assertNotIn("--globalConfig", plot)
                     # the surviving axis of the 2D variable: y without a binning record
                     self.assertEqual(self.arg(plot, "--var"), "HME")
 
@@ -408,6 +410,17 @@ class PlainChainTest(ChainTestCase):
                         )
                     ],
                 )
+
+    def test_a_failed_plot_fails_the_card(self):
+        self.write_merged_hists()
+        card = cards_of(limits_task())[fx.GROUP]
+        with self.assertRaises(RuntimeError) as raised:
+            self.run_payload(
+                card, create_datacards_module, fail=lambda cmd: "--all_keys" in cmd
+            )
+        message = str(raised.exception)
+        self.assertIn(f"shape plotting failed for {fx.VARIABLES[0]}", message)
+        self.assertIn("--make-plots False", message)
 
     def test_a_missing_input_is_named(self):
         self.write_merged_hists()
