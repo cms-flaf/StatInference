@@ -21,6 +21,7 @@ from .uncertainty import (
     UncertaintyScale,
     MultiValueLnNUncertainty,
     LnNUncertainty,
+    RateParamUncertainty,
     ShapeUncertainty,
 )
 from .model import Model
@@ -1319,6 +1320,12 @@ class DatacardMaker:
                         self.cbCopy(
                             param_str, proc_name, era, channel, category
                         ).syst_name([unc_name]).ForEachSyst(setShape)
+
+        if isinstance(unc, RateParamUncertainty):
+            # One parameter for every bin and process it was added to; the range is its own.
+            param = self.cb.GetParameter(unc_name)
+            if param:
+                param.set_range(*unc.value_range)
 
     def writeDatacards(self, output):
         os.makedirs(output, exist_ok=True)

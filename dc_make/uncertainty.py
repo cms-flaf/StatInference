@@ -19,6 +19,7 @@ class UncertaintyType(Enum):
     auto = 0
     lnN = 1
     shape = 2
+    rateParam = 3
 
 
 class Uncertainty:
@@ -158,6 +159,13 @@ class Uncertainty:
                 raise RuntimeError("Invalid lnN uncertainty value")
         elif unc_type == UncertaintyType.shape:
             unc = ShapeUncertainty(name, **args)
+        elif unc_type == UncertaintyType.rateParam:
+            unc = RateParamUncertainty(
+                name,
+                value=float(entry.get("value", 1.0)),
+                value_range=entry.get("range", RateParamUncertainty.default_range),
+                **args,
+            )
         elif unc_type == UncertaintyType.auto:
             unc = AutoUncertainty(name, **args)
         else:
@@ -337,6 +345,43 @@ class ShapeUncertainty(Uncertainty):
 
     def valueToMap(self, digits=3):
         return SystMap()(1.0)
+
+
+class RateParamUncertainty(Uncertainty):
+    """A freely floating normalisation (combine `rateParam`): one parameter that scales every
+    process and bin it applies to, starting at `value` and allowed within `value_range`. The same
+    name in several bins is one parameter, which is how a control region constrains the signal
+    region: scope it with `processes` and `categories` to the bins it should tie together.
+    """
+
+    default_range = [0.0, 10.0]
+
+    def __init__(self, name, value=1.0, value_range=None, **kwargs):
+        super().__init__(name, **kwargs)
+        self.value = value
+        self.value_range = list(value_range or self.default_range)
+        if (
+            len(self.value_range) != 2
+            or not self.value_range[0] <= value <= self.value_range[1]
+        ):
+            raise RuntimeError(
+                f"rateParam {name}: range {self.value_range} must be [low, high] and "
+                f"contain the initial value {value}"
+            )
+
+    @property
+    def type(self):
+        return UncertaintyType.rateParam
+
+    @property
+    def needShapes(self):
+        return False
+
+    def canIgnore(self, value_thr):
+        return False
+
+    def valueToMap(self, digits=3):
+        return SystMap()(self.value)
 
 
 class AutoUncertainty(Uncertainty):
