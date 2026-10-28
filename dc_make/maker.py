@@ -1136,6 +1136,19 @@ class DatacardMaker:
                     continue
 
             if (
+                isinstance(unc, RateParamUncertainty)
+                and unc.eras
+                and self.isMetaEra(era)
+                and not all(
+                    Uncertainty.hasMatch(e, unc.eras) for e in self.getSubEras(era)
+                )
+            ):
+                # a rateParam scales the whole bin: it cannot act on one sub-era's part
+                raise RuntimeError(
+                    f"rateParam {unc_name}: eras {unc.eras} select only part of the "
+                    f"meta-era {era}, whose bins sum all of {self.getSubEras(era)}"
+                )
+            if (
                 self.isMetaEra(era)
                 and isinstance(unc, (LnNUncertainty, MultiValueLnNUncertainty))
                 and self.lnNIsEraDependent(unc)
@@ -1321,11 +1334,7 @@ class DatacardMaker:
                             param_str, proc_name, era, channel, category
                         ).syst_name([unc_name]).ForEachSyst(setShape)
 
-        if isinstance(unc, RateParamUncertainty):
-            # One parameter for every bin and process it was added to; the range is its own.
-            param = self.cb.GetParameter(unc_name)
-            if param:
-                param.set_range(*unc.value_range)
+        unc.configureParameters(self.cb, unc_name)
 
     def writeDatacards(self, output):
         os.makedirs(output, exist_ok=True)

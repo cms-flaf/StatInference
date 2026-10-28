@@ -39,6 +39,10 @@ class Uncertainty:
         self.categories = categories
         self.hasMultipleValues = hasMultipleValues
 
+    def configureParameters(self, cb, name):
+        """Set what the card needs on the parameter(s) once the uncertainty is in it."""
+        pass
+
     def appliesTo(self, process, era, channel, category):
         match_subprocess = (
             any(
@@ -160,10 +164,24 @@ class Uncertainty:
         elif unc_type == UncertaintyType.shape:
             unc = ShapeUncertainty(name, **args)
         elif unc_type == UncertaintyType.rateParam:
+            unexpected = set(entry) - {
+                "name",
+                "type",
+                "value",
+                "range",
+                "processes",
+                "eras",
+                "channels",
+                "categories",
+            }
+            if unexpected:
+                raise RuntimeError(
+                    f"rateParam {name}: unsupported keys {sorted(unexpected)}"
+                )
             unc = RateParamUncertainty(
                 name,
-                value=float(entry.get("value", 1.0)),
-                value_range=entry.get("range", RateParamUncertainty.default_range),
+                value=entry.get("value", 1.0),
+                value_range=entry.get("range"),
                 **args,
             )
         elif unc_type == UncertaintyType.auto:
@@ -354,19 +372,35 @@ class RateParamUncertainty(Uncertainty):
     region: scope it with `processes` and `categories` to the bins it should tie together.
     """
 
-    default_range = [0.0, 10.0]
+    default_range = (0.0, 10.0)
 
     def __init__(self, name, value=1.0, value_range=None, **kwargs):
         super().__init__(name, **kwargs)
-        self.value = value
-        self.value_range = list(value_range or self.default_range)
+        if "$" in name:
+            # CombineHarvester would substitute the placeholder per bin, giving one
+            # parameter per bin where the range below could not be found
+            raise RuntimeError(
+                f"rateParam {name}: placeholders ($...) are not supported"
+            )
+        if value_range is None:
+            value_range = self.default_range
+        try:
+            self.value = float(value)
+            self.value_range = [float(v) for v in value_range]
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                f"rateParam {name}: value {value!r} and range {value_range!r} must be "
+                "numbers"
+            )
+        low, high = (self.value_range + [None, None])[:2]
         if (
             len(self.value_range) != 2
-            or not self.value_range[0] <= value <= self.value_range[1]
+            or not low < high
+            or not low <= self.value <= high
         ):
             raise RuntimeError(
                 f"rateParam {name}: range {self.value_range} must be [low, high] and "
-                f"contain the initial value {value}"
+                f"contain the initial value {self.value}"
             )
 
     @property
@@ -382,6 +416,12 @@ class RateParamUncertainty(Uncertainty):
 
     def valueToMap(self, digits=3):
         return SystMap()(self.value)
+
+    def configureParameters(self, cb, name):
+        # one parameter for every bin and process it was added to; the range is its own
+        param = cb.GetParameter(name)
+        if param:  # absent when the uncertainty matched no bin of this card
+            param.set_range(*self.value_range)
 
 
 class AutoUncertainty(Uncertainty):
