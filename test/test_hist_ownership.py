@@ -8,7 +8,10 @@ the processes, bins and uncertainties of a card. ROOT 6.36, the one of the CMSSW
 cards are built in, still owns the copies, so without the fix this test fails only under
 ROOT >= 6.40.
 
-The live histograms are counted with ROOT's object table, which counts only the objects made
+Uncertainty.fitFlat's TF1 is counted as well: PyROOT gives a TF1 made in Python to C++, where
+nothing deletes it, under every ROOT version.
+
+The live objects are counted with ROOT's object table, which counts only the objects made
 after it is switched on, so the calls run in a child process that switches it on first.
 
 Needs ROOT: run inside an analysis environment (source env.sh).
@@ -74,7 +77,9 @@ from StatInference.dc_make.uncertainty import UncertaintyScale
 def live():
     gc.collect()
     ROOT.gObjectTable.UpdateInstCount()
-    return sum(int(getattr(ROOT, c).Class().GetInstanceCount()) for c in ("TH1F", "TH1D"))
+    return sum(
+        int(getattr(ROOT, c).Class().GetInstanceCount()) for c in ("TH1F", "TH1D", "TF1")
+    )
 
 # In a function, so that no name keeps the proxy of a histogram that Close() deleted: cppyy
 # would hand that proxy out again for a histogram made at the same address.

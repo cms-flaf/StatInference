@@ -69,6 +69,9 @@ class Uncertainty:
         fit_func = ROOT.TF1("fit_func", constantFunction, 0, 10, 1)
         fit_func.SetParameter(0, 1.0)
         histogram.Fit(fit_func, "nq")
+        # PyROOT gives a TF1 made in Python to C++, where nothing deletes it. Taken back
+        # after the fit, which under ROOT 6.36 gives it to C++ again.
+        ROOT.SetOwnership(fit_func, True)
         chi2 = fit_func.GetChisquare()
         ndf = fit_func.GetNDF()
         p_value = ROOT.TMath.Prob(chi2, ndf)
