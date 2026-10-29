@@ -79,6 +79,9 @@ class Uncertainty:
     @staticmethod
     def haveCompatibleShapes(hist_a, hist_b, p_thr):
         hist_b = hist_b.Clone()
+        # PyROOT does not own what Clone() returns (ROOT >= 6.40), and with importROOT's
+        # AddDirectory(False) no directory does either.
+        ROOT.SetOwnership(hist_b, True)
         hist_b.Divide(hist_a)
         _, p_value, _, _ = Uncertainty.fitFlat(hist_b)
         return p_value > p_thr
@@ -354,6 +357,7 @@ class AutoUncertainty(Uncertainty):
         self, nominal_shape, shape_variations, auto_lnN_threshold, asym_value_threshold
     ):
         nominal_shape = nominal_shape.Clone()
+        ROOT.SetOwnership(nominal_shape, True)
         for n in range(0, nominal_shape.GetNbinsX() + 2):
             nominal_shape.SetBinError(n, 0)
         all_compatible = True
