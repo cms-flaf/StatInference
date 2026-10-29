@@ -264,7 +264,7 @@ class PlotPullsAndImpactsTask(DhiPlotMixin, StatInferenceTask):
         with open(self.card_for(entry, era, mass)) as f:
             for line in f:
                 parts = line.split()
-                if len(parts) >= 2 and parts[1] in ("shape", "lnN"):
+                if len(parts) >= 2 and parts[1] in ("shape", "lnN", "rateParam"):
                     card_params.add(parts[0])
 
         dropped = sorted(card_params - fitted)
