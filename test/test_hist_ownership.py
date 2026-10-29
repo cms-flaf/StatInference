@@ -67,7 +67,7 @@ sys.path.insert(0, sys.argv[1])
 import ROOT
 ROOT.TObject.SetObjectStat(True)
 # dc_make imports CombineHarvester at module level, and nothing counted here calls it: outside the
-# CMSSW environment a stand-in is registered for that import alone, as statinference_fixture does.
+# CMSSW environment a stand-in is registered in its place, as statinference_fixture does.
 if importlib.util.find_spec("CombineHarvester") is None:
     for name in ("CombineHarvester", "CombineHarvester.CombineTools", "CombineHarvester.CombineTools.ch"):
         sys.modules[name] = mock.MagicMock()
