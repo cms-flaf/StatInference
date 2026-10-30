@@ -32,11 +32,11 @@ class ResonantLimitsTask(StatInferenceTask):
         return CreateDatacardsTask.req(self, branches=())
 
     def era_card_outputs(self):
-        """{card era: the output of the branch that writes that card}."""
-        return {
-            task.branch_data: task.output()
-            for task in self.requires().get_branch_tasks().values()
-        }
+        """{card era: [the outputs of the branches that write that card's masses]}."""
+        outputs = {}
+        for task in self.requires().get_branch_tasks().values():
+            outputs.setdefault(task.branch_data["era"], []).append(task.output())
+        return outputs
 
     def output(self):
         return {
@@ -50,8 +50,12 @@ class ResonantLimitsTask(StatInferenceTask):
             "datacards": law.LocalDirectoryTarget(self.datacards_dir("combined")),
         }
 
-    def stage_datacards(self, era, remote_target):
+    def stage_datacards(self, era, remote_targets):
         """Mirror an era's datacards from fs_default to a stable local path, returned.
+
+        CreateDatacardsTask writes each mass to its own directory; they are merged here
+        into the one directory per era that the limits and the plots glob, laid out as when
+        one task wrote every mass (the file names carry the mass, so nothing collides).
 
         CreateDatacardsTask writes to fs_default, but the cards must be real local files
         by the time combine sees them: MergeResonantLimits shells out to combine, and
@@ -70,7 +74,15 @@ class ResonantLimitsTask(StatInferenceTask):
         if local_target.exists():
             local_target.remove()
         local_target.touch()
-        remote_target.copy_to_local(local_target)
+        for remote_target in remote_targets:
+            # each mass mirrored on its own, as the whole card was before, then merged in
+            part = law.LocalDirectoryTarget(is_tmp=True)
+            part.touch()
+            try:
+                remote_target.copy_to_local(part)
+                shutil.copytree(part.abspath, local_dir, dirs_exist_ok=True)
+            finally:
+                part.remove(silent=True)
         return local_dir
 
     def run(self):
