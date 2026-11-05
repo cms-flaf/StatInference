@@ -209,8 +209,15 @@ class StatInferenceTask(Task):
         data = self.get_config_data()
         model = data["model"]
         pattern = model["input_file_pattern"]
-        param_name = model["parameters"][0]
+        parameters = model.get("parameters", [])
+        if not parameters:
+            # Non-resonant: no mass scan -- one point with no parameters, whose
+            # variable the configuration names directly in input_file_pattern.
+            rel = Template(pattern).safe_substitute({"ERA": "ERA"})
+            variable = os.path.basename(os.path.dirname(rel))
+            return {variable: [{}]}
 
+        param_name = parameters[0]
         points = {}
         for mass in self.get_masses():
             rel = Template(pattern).safe_substitute({"ERA": "ERA", param_name: mass})
