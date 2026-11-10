@@ -25,6 +25,53 @@ class Binner:
             else:
                 entry["bins"] = listToVector(entry["bins"], "double")
 
+    def getHMELabel(self, era=None, channel=None, category=None, model_params=None):
+        if not self.linearize:
+            return None
+
+        def entry_passes(entry):
+            if not ("eras" not in entry or era in entry["eras"]):
+                return False
+            if not ("channels" not in entry or channel in entry["channels"]):
+                return False
+            if not ("categories" not in entry or category in entry["categories"]):
+                return False
+
+            if model_params is not None:
+                for param_key, param_value in model_params.items():
+                    if not (param_key not in entry or param_value in entry[param_key]):
+                        return False
+
+            return True
+
+        matching_entries = [
+            entry for entry in self.hist_bins
+            if entry_passes(entry)
+        ]
+
+        if len(matching_entries) == 0:
+            raise RuntimeError(
+                f"No HME bin found for era/channel/category/params "
+                f"{era}/{channel}/{category}/{model_params}"
+            )
+
+        y_bins = {
+            tuple(combined_bin["y_bin"])
+            for entry in matching_entries
+            for combined_bin in entry["combined_bins"]
+        }
+
+        if len(y_bins) != 1:
+            raise RuntimeError(
+                f"Multiple HME y_bins found for "
+                f"{era}/{channel}/{category}/{model_params}: {y_bins}"
+            )
+
+        y_min, y_max = next(iter(y_bins))
+
+        return f"HME{y_min:g}_{y_max:g}"
+
+
     def applyBinning(self, era, channel, category, model_params, hist):
         if len(self.hist_bins) == 0:
             return hist
