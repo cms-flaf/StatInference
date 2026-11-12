@@ -97,6 +97,16 @@ E.g.
 rm -r output/binning_v2/tauTau_2018/workers
 ```
 
+## Member uncertainties (QCD scale, PDF)
+
+A shape uncertainty can be given as a set of member histograms instead of an Up/Down pair:
+the QCD-scale points or the members of a Hessian PDF set. The card lists them under
+`members:`, and the datacard maker reduces them to Up/Down (`envelope` or `hessian`, with an
+optional reference member and alpha_s pair) on the shape that enters the bin -- after the
+sub-eras of a meta-era are summed and in the final binning, since the reduction is not
+linear. See `dc_make/member_reduction.py` for the syntax and the formulas;
+`test/test_member_reduction.py` checks them (no ROOT needed).
+
 ## Datacard cards
 
 The chain builds the datacard *cards* the analysis's `global.yaml` names in its
