@@ -29,6 +29,8 @@ import test_law_chain as chain  # noqa: E402
 
 import luigi  # noqa: E402
 
+import FLAF.RunKit.law_gfal as law_gfal  # noqa: E402
+
 REMOTE = "davs://storage.example:1094/store/user/flaf/inference"
 HIST_STORE = {fx.ERA_B: "merged_2022EE"}
 
@@ -144,15 +146,19 @@ class RemoteStatInferenceTest(chain.ChainTestCase):
         super().setUpClass()
         with open(os.path.join(cls.ana, "config/global.yaml"), "a") as f:
             f.write(f"fs_StatInference: {REMOTE}\n")
-        # no path-cache server: the filesystem is built and never listed
-        cls.no_server = mock.patch.object(
-            fx.Setup, "local_path_cache_server", lambda: None
-        )
-        cls.no_server.start()
+        # no path-cache server and no grid proxy (a CI runner has neither): the filesystem
+        # is built and never listed
+        cls.patches = [
+            mock.patch.object(fx.Setup, "local_path_cache_server", lambda: None),
+            mock.patch.object(law_gfal, "get_voms_proxy_info", lambda: {"path": None}),
+        ]
+        for patch in cls.patches:
+            patch.start()
 
     @classmethod
     def tearDownClass(cls):
-        cls.no_server.stop()
+        for patch in cls.patches:
+            patch.stop()
         super().tearDownClass()
 
     def test_every_product_is_on_the_remote_store(self):
