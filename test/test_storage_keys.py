@@ -7,16 +7,20 @@ for Run3_2022EE of its own) and `fs_StatInference`, on the configuration with a 
 step:
 
 * the merged histograms a card or its preprocessing reads are each era's `fs_Hists`, where
-  FLAF's HistMergerTask writes them, not its `fs_HistTuple`;
+  FLAF's HistMergerTask writes them, not its `fs_HistTuple`: `MergedHists` is the very path of
+  FLAF's `MergedHistsTask` (the output of HistMergerTask for that era);
 * the datacards, the preprocessed shapes and the limit and impact plots are written to
   `fs_StatInference`; the job logs stay on `fs_default`;
 * `fs_StatInference` is one for all the eras of a run: an era with another one is refused
-  where it is read.
+  where it is read;
+* a remote `fs_StatInference` (a URL, as the productions configure their stores) holds every
+  product, with the logs on a local `fs_default`.
 """
 
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -25,6 +29,7 @@ import test_law_chain as chain  # noqa: E402
 
 import luigi  # noqa: E402
 
+REMOTE = "davs://storage.example:1094/store/user/flaf/inference"
 HIST_STORE = {fx.ERA_B: "merged_2022EE"}
 
 
@@ -72,6 +77,21 @@ class StorageKeysTest(chain.ChainTestCase):
                     {r.output().abspath for r in reqs}, self.merged_hists(card_era)
                 )
 
+    def test_merged_hists_is_the_path_flaf_writes(self):
+        for era in fx.ERAS:
+            for variable in fx.VARIABLES:
+                with self.subTest(era=era, variable=variable):
+                    reader = fx.si.MergedHists(
+                        **chain.root_params(), hist_era=era, variable=variable
+                    )
+                    writer = fx.analysis.MergedHistsTask(
+                        version=chain.HISTS_VERSION, era=era, variable=variable
+                    )
+                    self.assertEqual(reader.output().abspath, writer.output().abspath)
+                    self.assertEqual(
+                        reader.output().abspath, self.merged_hist(era, variable)
+                    )
+
     def test_the_products_are_written_to_fs_StatInference(self):
         limits = chain.limits_task()
         for (card_era, mass), card in chain.cards_of(limits).items():
@@ -110,6 +130,43 @@ class StorageKeysTest(chain.ChainTestCase):
 
     def test_the_job_logs_stay_on_fs_default(self):
         (workflow,) = chain.card_workflows(chain.limits_task())
+        self.assertEqual(
+            workflow.remote_log_dir_target().abspath,
+            self.store("default", chain.VERSION, "logs", "CreateDatacardsTask"),
+        )
+
+
+class RemoteStatInferenceTest(chain.ChainTestCase):
+    card_file = "config/Datacards/card_preprocess.yaml"
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        with open(os.path.join(cls.ana, "config/global.yaml"), "a") as f:
+            f.write(f"fs_StatInference: {REMOTE}\n")
+        # no path-cache server: the filesystem is built and never listed
+        cls.no_server = mock.patch.object(
+            fx.Setup, "local_path_cache_server", lambda: None
+        )
+        cls.no_server.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.no_server.stop()
+        super().tearDownClass()
+
+    def test_every_product_is_on_the_remote_store(self):
+        limits = chain.limits_task()
+        self.assertEqual(limits.fs_StatInference.base, [REMOTE])
+        targets = []
+        for card in chain.cards_of(limits).values():
+            targets += [card.output(), chain.preprocess_of(card).output()]
+        for cls in (fx.si.PlotResonantLimitsTask, fx.si.PlotPullsAndImpactsTask):
+            targets.append(cls(**chain.root_params(), card=self.card_name).output())
+        for target in targets:
+            self.assertIs(target.fs, limits.fs_StatInference)
+            self.assertTrue(target.uri().startswith(f"{REMOTE}/{chain.VERSION}/"))
+        (workflow,) = chain.card_workflows(limits)
         self.assertEqual(
             workflow.remote_log_dir_target().abspath,
             self.store("default", chain.VERSION, "logs", "CreateDatacardsTask"),

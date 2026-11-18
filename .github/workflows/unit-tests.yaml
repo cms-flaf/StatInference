@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: cms-flaf/FLAF
-          ref: 4d9602cdbcdf6d09ba4566b4f83e3878e39975ca
+          ref: 2bcfc62355855815bfef843d21c38d4ec2af7dd3
           path: FLAF
 
       - name: Set up Python
@@ -50,3 +50,4 @@ jobs:
           StatInference/test/test_shape_plots.py
           StatInference/test/test_card_config.py
           StatInference/test/test_external_limits.py
+          StatInference/test/test_storage_keys.py
