@@ -14,6 +14,7 @@ from .ResonantLimitsTask import ResonantLimitsTask
 from .PlotResonantLimitsTask import PlotResonantLimitsTask
 from .PlotPullsAndImpactsTask import PlotPullsAndImpactsTask
 from .ResonantLimitsAndHistPlotTask import ResonantLimitsAndHistPlotTask
+from .CWSTask import CWSTask
 
 __all__ = [
     "StatInferenceTask",
@@ -24,4 +25,5 @@ __all__ = [
     "PlotResonantLimitsTask",
     "PlotPullsAndImpactsTask",
     "ResonantLimitsAndHistPlotTask",
+    "CWSTask",
 ]
