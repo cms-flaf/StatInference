@@ -285,12 +285,27 @@ class StatInferenceTask(Task):
         """
         return self.get_config_data(card).get("campaigns", {}).get(era)
 
+    def is_nonresonant(self, card=None):
+        """A model without parameters (``parameters: [ ]``): no mass scan. Such a card is
+        built as a single point per era whose mass is None, so it keeps the
+        (card, era, mass) branch layout of the resonant cards."""
+        return not self.get_config_data(card)["model"].get("parameters")
+
+    @staticmethod
+    def point_has_mass(point, mass):
+        """Whether model point `point` ({parameter: value}, {} for a non-resonant card)
+        is the mass point `mass` (None for a non-resonant card)."""
+        return mass in point.values() if point else mass is None
+
     def get_masses(self, card=None):
         """Every parameter value the configuration declares, across all processes.
 
         Not restricted to signals: with ``param_dependent_bkg`` a background can be
         parameterised too, and its histograms live in the same per-mass input file.
+        A non-resonant card has the one point [None].
         """
+        if self.is_nonresonant(card):
+            return [None]
         masses = set()
         for proc in self.get_config_data(card).get("processes", []):
             if not isinstance(proc, dict):
@@ -313,8 +328,15 @@ class StatInferenceTask(Task):
         data = self.get_config_data(card)
         model = data["model"]
         pattern = model["input_file_pattern"]
-        param_name = model["parameters"][0]
+        parameters = model.get("parameters", [])
+        if not parameters:
+            # Non-resonant: no mass scan -- one point with no parameters, whose
+            # variable the configuration names directly in input_file_pattern.
+            rel = Template(pattern).safe_substitute({"ERA": "ERA"})
+            variable = os.path.basename(os.path.dirname(rel))
+            return {variable: [{}]}
 
+        param_name = parameters[0]
         points = {}
         for mass in self.get_masses(card):
             rel = Template(pattern).safe_substitute({"ERA": "ERA", param_name: mass})
@@ -341,6 +363,9 @@ class StatInferenceTask(Task):
         card declares. One global list serves every card, so a mass one card lacks is
         simply not built for it (check_requested_masses() refuses one no card has)."""
         own = self.get_masses(card)
+        if self.is_nonresonant(card):
+            # param_values restricts mass scans; a card without one is always built.
+            return own
         requested = list(self.statinference_settings().get("param_values") or [])
         return [m for m in requested if m in own] if requested else own
 
@@ -348,7 +373,12 @@ class StatInferenceTask(Task):
         """Refuse a `param_values` mass no card declares: most likely a typo, and it
         would otherwise just build nothing."""
         requested = self.statinference_settings().get("param_values") or []
-        known = {m for card in self.card_names() for m in self.get_masses(card)}
+        known = {
+            m
+            for card in self.card_names()
+            if not self.is_nonresonant(card)
+            for m in self.get_masses(card)
+        }
         unknown = [m for m in requested if m not in known]
         if unknown:
             raise ValueError(
@@ -378,7 +408,9 @@ class StatInferenceTask(Task):
         variables = {
             variable
             for variable, points in self.get_variable_points(card).items()
-            if any(value in masses for point in points for value in point.values())
+            if any(
+                self.point_has_mass(point, mass) for point in points for mass in masses
+            )
         }
         return {
             key: req

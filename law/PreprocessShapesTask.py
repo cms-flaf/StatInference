@@ -56,6 +56,11 @@ class PreprocessShapesTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflo
         ]
 
     def model_param(self, card):
+        if self.is_nonresonant(card):
+            raise ValueError(
+                f"{self.datacard_config_path(card)}: a `preprocess:` step is not supported "
+                "for a card without model parameters"
+            )
         return self.get_config_data(card)["model"]["parameters"][0]
 
     def input_hist_reqs(self, branches):

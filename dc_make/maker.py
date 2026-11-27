@@ -1074,7 +1074,10 @@ class DatacardMaker:
             model_params = process.params
             param_str = self.model.paramStr(model_params)
             if self.keep_all_signal_hypothesis_into_single_datacard:
-                actual_proc_name = f"{process.name}_{param_str}"
+                # no suffix for a process without parameters (non-resonant)
+                actual_proc_name = (
+                    f"{process.name}_{param_str}" if param_str else process.name
+                )
                 add(model_params, "*", actual_proc_name)
                 self.param_of[("*", actual_proc_name)] = model_params
                 self.base_of[actual_proc_name] = process.name

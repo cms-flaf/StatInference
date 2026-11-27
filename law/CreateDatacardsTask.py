@@ -107,15 +107,13 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         # fs_StatInference, one directory per mass under the card's era. Note that combine cannot
         # read these directly: ResonantLimitsTask mirrors an era's masses back into one
         # datacards_dir() before handing them to dhi -- see ResonantLimitsTask.stage_datacards.
+        # A non-resonant card has no mass, so no per-mass directory.
         card = self.branch_data["card"]
-        param = self.get_config_data(card)["model"]["parameters"][0]
-        return self.output_dir_target(
-            self.version,
-            "Datacards",
-            card,
-            self.branch_data["era"],
-            f"{param}_{self.branch_data['mass']}",
-        )
+        parts = [self.version, "Datacards", card, self.branch_data["era"]]
+        if not self.is_nonresonant(card):
+            param = self.get_config_data(card)["model"]["parameters"][0]
+            parts.append(f"{param}_{self.branch_data['mass']}")
+        return self.output_dir_target(*parts)
 
     def run(self):
         card = self.branch_data["card"]
@@ -171,7 +169,8 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
             ]
             if hist_bins:
                 cmd += ["--hist-bins", hist_bins]
-            cmd += ["--param_values", str(self.branch_data["mass"])]
+            if mass is not None:
+                cmd += ["--param_values", str(mass)]
             ps_call(cmd, env=self.cmssw_env, verbose=1)
 
             if self.make_plots:
@@ -360,7 +359,7 @@ class CreateDatacardsTask(StatInferenceTask, HTCondorWorkflow, law.LocalWorkflow
         # reads. Plotting them separately would show something the fit never sees.
         # this branch's mass point only: the variables whose input it is
         variable_points = {
-            variable: [p for p in points if mass in p.values()]
+            variable: [p for p in points if self.point_has_mass(p, mass)]
             for variable, points in self.get_variable_points(card).items()
         }
         variable_points = {v: p for v, p in variable_points.items() if p}

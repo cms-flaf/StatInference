@@ -11,9 +11,11 @@ from .MergedHists import MergedHists
 from .PreprocessShapesTask import PreprocessShapesTask
 from .CreateDatacardsTask import CreateDatacardsTask
 from .ResonantLimitsTask import ResonantLimitsTask
+from .NonResonantLimitsTask import NonResonantLimitsTask
 from .PlotResonantLimitsTask import PlotResonantLimitsTask
 from .PlotPullsAndImpactsTask import PlotPullsAndImpactsTask
 from .ResonantLimitsAndHistPlotTask import ResonantLimitsAndHistPlotTask
+from .NonResonantLimitsAndHistPlotTask import NonResonantLimitsAndHistPlotTask
 
 __all__ = [
     "StatInferenceTask",
@@ -21,7 +23,9 @@ __all__ = [
     "PreprocessShapesTask",
     "CreateDatacardsTask",
     "ResonantLimitsTask",
+    "NonResonantLimitsTask",
     "PlotResonantLimitsTask",
     "PlotPullsAndImpactsTask",
     "ResonantLimitsAndHistPlotTask",
+    "NonResonantLimitsAndHistPlotTask",
 ]
